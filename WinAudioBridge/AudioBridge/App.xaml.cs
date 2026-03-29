@@ -38,6 +38,7 @@ public partial class App : System.Windows.Application
 		_windowsVolumeService = new WindowsVolumeService(_logService, _volumeIconService);
 		_windowsVolumeService.StartMonitoring();
 		_streamingCoordinator = new StreamingCoordinator(_settingsService, _adbService, _audioCaptureService, _audioTransportService, _windowsVolumeService, _volumeIconService, _logService);
+		_settingsService.SettingsChanged += SettingsService_SettingsChanged;
 
 		_mainWindow = new MainWindow(_settingsService, _streamingCoordinator, _windowsVolumeService, _logService)
 		{
@@ -52,14 +53,39 @@ public partial class App : System.Windows.Application
 			exitApplication: ExitApplication);
 
 		_trayService.Initialize();
+
+		_ = Dispatcher.BeginInvoke(async () =>
+		{
+			if (_streamingCoordinator is null)
+			{
+				return;
+			}
+
+			await _streamingCoordinator.AutoConnectIfPossibleAsync("启动后自动连接", restartIfRunning: false);
+		});
 	}
 
 	protected override void OnExit(ExitEventArgs e)
 	{
+		if (_settingsService is not null)
+		{
+			_settingsService.SettingsChanged -= SettingsService_SettingsChanged;
+		}
+
 		_trayService?.Dispose();
 		_windowsVolumeService?.Dispose();
 		_streamingCoordinator?.Dispose();
 		base.OnExit(e);
+	}
+
+	private async void SettingsService_SettingsChanged(object? sender, EventArgs e)
+	{
+		if (_streamingCoordinator is null || _isExiting)
+		{
+			return;
+		}
+
+		await _streamingCoordinator.AutoConnectIfPossibleAsync("配置修改后自动连接", restartIfRunning: true);
 	}
 
 	private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)

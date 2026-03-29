@@ -54,10 +54,11 @@ public sealed class SettingsService
         Channels = Current.Channels,
         BufferMilliseconds = Current.BufferMilliseconds,
         AndroidAppPackageName = Current.AndroidAppPackageName,
-        PreferredDeviceSerial = Current.PreferredDeviceSerial
+        PreferredDeviceSerial = Current.PreferredDeviceSerial,
+        EnableAutoReconnect = Current.EnableAutoReconnect
     };
 
-    private static AppSettings Normalize(AppSettings settings)
+    internal static AppSettings Normalize(AppSettings settings)
     {
         var normalized = settings ?? AppSettings.CreateDefault();
 
@@ -87,6 +88,8 @@ public sealed class SettingsService
         }
 
         normalized.PreferredDeviceSerial ??= string.Empty;
+
+        normalized.EnableAutoReconnect = normalized.EnableAutoReconnect;
 
         return normalized;
     }

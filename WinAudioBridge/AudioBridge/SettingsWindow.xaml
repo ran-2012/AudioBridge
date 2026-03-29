@@ -35,6 +35,8 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="16" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="16" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <TextBlock VerticalAlignment="Center" Text="编码" />
@@ -52,7 +54,14 @@
             <TextBlock Grid.Row="8" VerticalAlignment="Center" Text="Android 应用包名" />
             <TextBox x:Name="AndroidPackageNameTextBox" Grid.Row="8" Grid.Column="2" MinWidth="180" />
 
-            <TextBlock Grid.Row="10"
+            <TextBlock Grid.Row="10" VerticalAlignment="Center" Text="自动重连" />
+            <CheckBox x:Name="EnableAutoReconnectCheckBox"
+                      Grid.Row="10"
+                      Grid.Column="2"
+                      VerticalAlignment="Center"
+                      Content="启动后自动连接、配置修改后自动重连，并在断开后持续尝试重连" />
+
+            <TextBlock Grid.Row="12"
                        Grid.ColumnSpan="3"
                        Foreground="#666"
                        TextWrapping="Wrap"
