@@ -8,6 +8,7 @@ namespace WpfApp1.Services;
 
 public sealed class VolumeIconService
 {
+    private const int TargetIconSize = 64;
     private readonly AppLogService _logService;
 
     public VolumeIconService(AppLogService logService)
@@ -58,7 +59,7 @@ public sealed class VolumeIconService
                 return null;
             }
 
-            using var bitmap = icon.ToBitmap();
+            using var bitmap = new Bitmap(icon.ToBitmap(), new Size(TargetIconSize, TargetIconSize));
             using var memoryStream = new MemoryStream();
             bitmap.Save(memoryStream, ImageFormat.Png);
             return memoryStream.ToArray();

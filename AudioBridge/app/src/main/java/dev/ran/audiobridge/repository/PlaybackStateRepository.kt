@@ -103,9 +103,15 @@ object PlaybackStateRepository {
 
     fun upsertWindowsSession(session: WindowsAppVolumeSession, statusMessage: String) {
         val current = mutableState.value.windowsVolumeCatalog
+        val existing = current.sessions.firstOrNull { it.sessionId == session.sessionId }
+        val mergedSession = session.copy(
+            iconKey = session.iconKey.ifBlank { existing?.iconKey.orEmpty() },
+            iconHash = session.iconHash.ifBlank { existing?.iconHash.orEmpty() },
+            iconBase64 = session.iconBase64 ?: existing?.iconBase64,
+        )
         val updated = current.sessions
             .filterNot { it.sessionId == session.sessionId }
-            .plus(session)
+            .plus(mergedSession)
             .sortedWith(compareByDescending<WindowsAppVolumeSession> { it.state.equals("Active", ignoreCase = true) }.thenBy { it.displayName.lowercase() })
 
         mutableState.value = mutableState.value.copy(

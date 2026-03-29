@@ -38,6 +38,7 @@ public partial class SettingsWindow : Window
         BufferComboBox.SelectedItem = settings.BufferMilliseconds;
         AndroidPackageNameTextBox.Text = settings.AndroidAppPackageName;
         _preferredDeviceSerial = settings.PreferredDeviceSerial;
+        EnableAutoReconnectCheckBox.IsChecked = settings.EnableAutoReconnect;
         UpdateSelectedDeviceText();
     }
 
@@ -64,10 +65,11 @@ public partial class SettingsWindow : Window
             Channels = channels,
             BufferMilliseconds = bufferMilliseconds,
             AndroidAppPackageName = AndroidPackageNameTextBox.Text.Trim(),
-            PreferredDeviceSerial = _preferredDeviceSerial
+            PreferredDeviceSerial = _preferredDeviceSerial,
+            EnableAutoReconnect = EnableAutoReconnectCheckBox.IsChecked == true
         });
 
-        _logService.Info("Settings", $"设置已保存：编码={encoding}，采样率={sampleRate}，声道={channels}，Buffer={bufferMilliseconds}ms，优先设备={(_preferredDeviceSerial.Length == 0 ? "自动" : _preferredDeviceSerial)}。");
+        _logService.Info("Settings", $"设置已保存：编码={encoding}，采样率={sampleRate}，声道={channels}，Buffer={bufferMilliseconds}ms，优先设备={(_preferredDeviceSerial.Length == 0 ? "自动" : _preferredDeviceSerial)}，自动重连={(EnableAutoReconnectCheckBox.IsChecked == true ? "开启" : "关闭")}。");
 
         Close();
     }
@@ -86,6 +88,7 @@ public partial class SettingsWindow : Window
         BufferComboBox.SelectedItem = defaults.BufferMilliseconds;
         AndroidPackageNameTextBox.Text = defaults.AndroidAppPackageName;
         _preferredDeviceSerial = defaults.PreferredDeviceSerial;
+        EnableAutoReconnectCheckBox.IsChecked = defaults.EnableAutoReconnect;
         DevicesListView.SelectedItem = null;
         UpdateSelectedDeviceText();
     }

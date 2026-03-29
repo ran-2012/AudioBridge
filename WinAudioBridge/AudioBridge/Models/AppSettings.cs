@@ -14,5 +14,7 @@ public sealed class AppSettings
 
     public string PreferredDeviceSerial { get; set; } = string.Empty;
 
+    public bool EnableAutoReconnect { get; set; } = true;
+
     public static AppSettings CreateDefault() => new();
 }

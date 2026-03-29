@@ -8,6 +8,7 @@ namespace WpfApp1.Services;
 
 public sealed class StreamingCoordinator : IDisposable
 {
+    private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(3);
     private readonly SettingsService _settingsService;
     private readonly AdbService _adbService;
     private readonly AudioCaptureService _audioCaptureService;
@@ -22,6 +23,8 @@ public sealed class StreamingCoordinator : IDisposable
     };
     private NAudio.Wave.WaveFormat? _activeCaptureFormat;
     private StreamingSessionOptions? _activeSessionOptions;
+    private CancellationTokenSource? _reconnectCancellationTokenSource;
+    private Task? _reconnectTask;
     private uint _sequence;
     private bool _frameSendFaulted;
     private bool _isStopping;
@@ -53,7 +56,7 @@ public sealed class StreamingCoordinator : IDisposable
 
     public event EventHandler? StatusChanged;
 
-    public async Task PrepareAsync(CancellationToken cancellationToken = default)
+    public async Task PrepareAsync(CancellationToken cancellationToken = default, bool requireAudioAppRunning = false)
     {
         try
         {
@@ -68,17 +71,15 @@ public sealed class StreamingCoordinator : IDisposable
                 return;
             }
 
-            var targetDevice = deviceResult.Devices.FirstOrDefault(x =>
-                                   string.Equals(x.Serial, options.PreferredDeviceSerial, StringComparison.OrdinalIgnoreCase) &&
-                                   string.Equals(x.State, "Online", StringComparison.OrdinalIgnoreCase))
-                ?? deviceResult.Devices.FirstOrDefault(x => string.Equals(x.State, "Online", StringComparison.OrdinalIgnoreCase) && x.IsAudioAppRunning)
-                ?? deviceResult.Devices.FirstOrDefault(x => string.Equals(x.State, "Online", StringComparison.OrdinalIgnoreCase))
-                ?? deviceResult.Devices.FirstOrDefault();
+            var targetDevice = SelectTargetDevice(deviceResult.Devices, options.PreferredDeviceSerial, requireAudioAppRunning);
 
             if (targetDevice is null)
             {
-                _logService.Warning("Coordinator", "未找到可用于推流的 Android 设备。 ");
-                UpdateStatus(StreamingState.Faulted, "未找到可用于推流的 Android 设备。", null, null);
+                var message = requireAudioAppRunning
+                    ? "未检测到已启动接收端应用的 Android 设备，已跳过自动连接。"
+                    : "未找到可用于推流的 Android 设备。";
+                _logService.Warning("Coordinator", message + " ");
+                UpdateStatus(requireAudioAppRunning ? StreamingState.Idle : StreamingState.Faulted, message, null, null);
                 return;
             }
 
@@ -105,13 +106,13 @@ public sealed class StreamingCoordinator : IDisposable
         }
     }
 
-    public async Task StartStreamingAsync(CancellationToken cancellationToken = default)
+    public async Task StartStreamingAsync(CancellationToken cancellationToken = default, bool requireAudioAppRunning = false)
     {
         try
         {
             if (Status.State is StreamingState.Idle or StreamingState.Faulted)
             {
-                await PrepareAsync(cancellationToken);
+                await PrepareAsync(cancellationToken, requireAudioAppRunning);
             }
 
             if (Status.State != StreamingState.Ready)
@@ -124,10 +125,11 @@ public sealed class StreamingCoordinator : IDisposable
             UpdateStatus(StreamingState.Preparing, "正在建立 TCP 连接并发送初始化消息...", Status.TargetDeviceSerial, Status.TargetDeviceName);
             await _audioTransportService.ConnectAsync("127.0.0.1", options.LocalPort, cancellationToken);
             await _audioTransportService.SendSessionHeaderAsync(options, cancellationToken);
-            await SendVolumeCatalogSnapshotAsync(0, includeIconsInline: false, cancellationToken);
+            await SendVolumeCatalogSnapshotAsync(0, includeIconsInline: true, cancellationToken);
             _sequence = 0;
             _isStopping = false;
             _frameSendFaulted = false;
+            CancelReconnectLoop();
             _audioCaptureService.Start();
             UpdateStatus(StreamingState.Streaming, "推流链路已建立，正在发送音频帧。", Status.TargetDeviceSerial, Status.TargetDeviceName);
         }
@@ -155,6 +157,7 @@ public sealed class StreamingCoordinator : IDisposable
         try
         {
             _isStopping = true;
+            CancelReconnectLoop();
             _frameSendFaulted = true;
             await Task.Run(() => _audioCaptureService.Stop());
             await _audioTransportService.DisconnectAsync();
@@ -177,8 +180,26 @@ public sealed class StreamingCoordinator : IDisposable
         _audioCaptureService.AudioFrameCaptured -= OnAudioFrameCaptured;
         _audioTransportService.MessageReceived -= OnTransportMessageReceived;
         _windowsVolumeService.SnapshotChanged -= OnWindowsVolumeSnapshotChanged;
+        CancelReconnectLoop();
         _audioCaptureService.Dispose();
         _audioTransportService.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    public async Task AutoConnectIfPossibleAsync(string reason, bool restartIfRunning)
+    {
+        if (restartIfRunning && Status.State is StreamingState.Streaming or StreamingState.Preparing or StreamingState.Ready)
+        {
+            _logService.Info("Coordinator", $"{reason}：检测到当前链路活动，准备重建连接。 ");
+            await StopStreamingAsync();
+        }
+
+        if (Status.State is StreamingState.Streaming or StreamingState.Preparing)
+        {
+            return;
+        }
+
+        _logService.Info("Coordinator", $"{reason}：开始检查是否满足自动连接条件。 ");
+        await StartStreamingAsync(requireAudioAppRunning: true);
     }
 
     private async void OnTransportMessageReceived(object? sender, TransportMessageReceivedEventArgs e)
@@ -213,7 +234,7 @@ public sealed class StreamingCoordinator : IDisposable
 
         try
         {
-            await SendVolumeCatalogSnapshotAsync(0, includeIconsInline: false, CancellationToken.None);
+            await SendVolumeCatalogSnapshotAsync(0, includeIconsInline: true, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -315,7 +336,67 @@ public sealed class StreamingCoordinator : IDisposable
             _audioCaptureService.Stop();
             await _audioTransportService.DisconnectAsync();
             UpdateStatus(StreamingState.Faulted, $"发送音频帧失败：{ex.Message}", Status.TargetDeviceSerial, Status.TargetDeviceName);
+            ScheduleReconnect("音频链路断开，准备自动重连。");
         }
+    }
+
+    private void ScheduleReconnect(string reason)
+    {
+        if (!_settingsService.Current.EnableAutoReconnect)
+        {
+            _logService.Info("Coordinator", $"{reason} 但用户已关闭自动重连。 ");
+            return;
+        }
+
+        if (_reconnectTask is { IsCompleted: false })
+        {
+            return;
+        }
+
+        _logService.Warning("Coordinator", reason);
+        _reconnectCancellationTokenSource?.Dispose();
+        _reconnectCancellationTokenSource = new CancellationTokenSource();
+        _reconnectTask = Task.Run(() => ReconnectLoopAsync(_reconnectCancellationTokenSource.Token));
+    }
+
+    private async Task ReconnectLoopAsync(CancellationToken cancellationToken)
+    {
+        var attempt = 0;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            attempt++;
+
+            try
+            {
+                _logService.Info("Coordinator", $"开始第 {attempt} 次自动重连尝试。 ");
+                await StartStreamingAsync(cancellationToken, requireAudioAppRunning: true);
+
+                if (Status.State == StreamingState.Streaming)
+                {
+                    _logService.Info("Coordinator", "自动重连成功。 ");
+                    return;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logService.Warning("Coordinator", $"自动重连尝试失败：{ex.Message}");
+            }
+
+            await Task.Delay(ReconnectDelay, cancellationToken);
+        }
+    }
+
+    private void CancelReconnectLoop()
+    {
+        _reconnectCancellationTokenSource?.Cancel();
+        _reconnectCancellationTokenSource?.Dispose();
+        _reconnectCancellationTokenSource = null;
+        _reconnectTask = null;
     }
 
     private async Task HandleVolumeCatalogRequestAsync(string json)
@@ -395,7 +476,7 @@ public sealed class StreamingCoordinator : IDisposable
             0,
             "Windows 应用音量已更新。",
             masterVolume: null,
-            session: session is null ? null : BuildSessionDto(session, includeIconsInline: false),
+            session: session is null ? null : BuildSessionDto(session, includeIconsInline: true),
             catalog: null,
             CancellationToken.None);
     }
@@ -516,6 +597,33 @@ public sealed class StreamingCoordinator : IDisposable
     private static string GetPreferredDeviceText(string? preferredDeviceSerial)
     {
         return string.IsNullOrWhiteSpace(preferredDeviceSerial) ? "自动选择" : preferredDeviceSerial;
+    }
+
+    internal static AndroidDeviceInfo? SelectTargetDevice(IReadOnlyList<AndroidDeviceInfo> devices, string? preferredDeviceSerial, bool requireAudioAppRunning)
+    {
+        var onlineDevices = devices.Where(x => string.Equals(x.State, "Online", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (onlineDevices.Count == 0)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(preferredDeviceSerial))
+        {
+            var preferred = onlineDevices.FirstOrDefault(x => string.Equals(x.Serial, preferredDeviceSerial, StringComparison.OrdinalIgnoreCase));
+            if (preferred is not null && (!requireAudioAppRunning || preferred.IsAudioAppRunning))
+            {
+                return preferred;
+            }
+        }
+
+        if (requireAudioAppRunning)
+        {
+            return onlineDevices.FirstOrDefault(x => x.IsAudioAppRunning);
+        }
+
+        return onlineDevices.FirstOrDefault(x => x.IsAudioAppRunning)
+               ?? onlineDevices.FirstOrDefault()
+               ?? devices.FirstOrDefault();
     }
 
     private static string DetectEncoding(NAudio.Wave.WaveFormat waveFormat)

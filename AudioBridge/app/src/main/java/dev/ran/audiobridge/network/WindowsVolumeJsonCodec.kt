@@ -10,7 +10,7 @@ import org.json.JSONObject
 object WindowsVolumeJsonCodec {
     fun buildCatalogRequest(requestId: UInt): String = JSONObject()
         .put("requestId", requestId.toLong())
-        .put("includeIconsInline", false)
+        .put("includeIconsInline", true)
         .toString()
 
     fun buildSetMasterRequest(requestId: UInt, volume: Float? = null, isMuted: Boolean? = null): String {
