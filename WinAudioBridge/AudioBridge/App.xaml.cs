@@ -1,4 +1,5 @@
-﻿using System.Windows;
+﻿using System.Threading;
+using System.Windows;
 using WpfApp1.Services;
 
 namespace WpfApp1;
@@ -8,6 +9,8 @@ namespace WpfApp1;
 /// </summary>
 public partial class App : System.Windows.Application
 {
+	private const string SingleInstanceMutexName = "Local\\WinAudioBridge.SingleInstance";
+	private Mutex? _singleInstanceMutex;
 	private SettingsService? _settingsService;
 	private AppLogService? _logService;
 	private TrayService? _trayService;
@@ -23,6 +26,20 @@ public partial class App : System.Windows.Application
 
 	protected override void OnStartup(StartupEventArgs e)
 	{
+		_singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var createdNew);
+		if (!createdNew)
+		{
+			_singleInstanceMutex.Dispose();
+			_singleInstanceMutex = null;
+			System.Windows.MessageBox.Show(
+				"WinAudioBridge 已在运行。",
+				"WinAudioBridge",
+				MessageBoxButton.OK,
+				MessageBoxImage.Information);
+			Shutdown();
+			return;
+		}
+
 		base.OnStartup(e);
 
 		ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -75,6 +92,9 @@ public partial class App : System.Windows.Application
 		_trayService?.Dispose();
 		_windowsVolumeService?.Dispose();
 		_streamingCoordinator?.Dispose();
+		_singleInstanceMutex?.ReleaseMutex();
+		_singleInstanceMutex?.Dispose();
+		_singleInstanceMutex = null;
 		base.OnExit(e);
 	}
 
@@ -127,7 +147,7 @@ public partial class App : System.Windows.Application
 			return;
 		}
 
-		if (_adbService is null || _logService is null)
+		if (_adbService is null || _logService is null || _audioCaptureService is null)
 		{
 			return;
 		}
@@ -138,7 +158,7 @@ public partial class App : System.Windows.Application
 			return;
 		}
 
-		_settingsWindow = new SettingsWindow(_settingsService, _adbService, _logService)
+		_settingsWindow = new SettingsWindow(_settingsService, _adbService, _logService, _audioCaptureService)
 		{
 		};
 

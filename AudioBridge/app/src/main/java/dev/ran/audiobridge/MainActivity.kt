@@ -5,10 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.ran.audiobridge.ui.AudioBridgeScreen
 import dev.ran.audiobridge.ui.theme.AudioBridgeTheme
@@ -25,19 +22,18 @@ class MainActivity : ComponentActivity() {
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
             AudioBridgeTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) {
-                    AudioBridgeScreen(
-                        uiState = uiState,
-                        onStartService = viewModel::startService,
-                        onStopService = viewModel::stopService,
-                        onVolumeChanged = viewModel::updateVolume,
-                        onRequestWindowsVolumeSnapshot = viewModel::requestWindowsVolumeSnapshot,
-                        onWindowsMasterVolumeChanged = viewModel::updateWindowsMasterVolume,
-                        onWindowsMasterMuteChanged = viewModel::updateWindowsMasterMute,
-                        onWindowsSessionVolumeChanged = viewModel::updateWindowsSessionVolume,
-                        onWindowsSessionMuteChanged = viewModel::updateWindowsSessionMute,
-                    )
-                }
+                AudioBridgeScreen(
+                    uiState = uiState,
+                    onStartService = viewModel::startService,
+                    onStopService = viewModel::stopService,
+                    onVolumeChanged = viewModel::updateVolume,
+                    onPlaybackCacheChanged = viewModel::updatePlaybackCacheMilliseconds,
+                    onRequestWindowsVolumeSnapshot = viewModel::requestWindowsVolumeSnapshot,
+                    onWindowsMasterVolumeChanged = viewModel::updateWindowsMasterVolume,
+                    onWindowsMasterMuteChanged = viewModel::updateWindowsMasterMute,
+                    onWindowsSessionVolumeChanged = viewModel::updateWindowsSessionVolume,
+                    onWindowsSessionMuteChanged = viewModel::updateWindowsSessionMute,
+                )
             }
         }
     }

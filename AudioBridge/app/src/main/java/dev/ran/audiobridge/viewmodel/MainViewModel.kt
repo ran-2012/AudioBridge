@@ -3,6 +3,7 @@ package dev.ran.audiobridge.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.ran.audiobridge.audio.PlaybackCacheConfig
 import dev.ran.audiobridge.data.VolumePreferencesRepository
 import dev.ran.audiobridge.repository.PlaybackStateRepository
 import dev.ran.audiobridge.service.AudioBridgeService
@@ -24,6 +25,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             volumePreferencesRepository.volumeFlow.collect { volume ->
                 PlaybackStateRepository.updateVolume(volume)
+            }
+        }
+
+        viewModelScope.launch {
+            volumePreferencesRepository.playbackCacheMillisecondsFlow.collect { milliseconds ->
+                PlaybackStateRepository.updatePlaybackCacheMilliseconds(milliseconds)
             }
         }
     }
@@ -59,6 +66,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             volumePreferencesRepository.saveVolume(volume)
         }
         context.startService(AudioBridgeService.createVolumeIntent(context, volume))
+    }
+
+    fun updatePlaybackCacheMilliseconds(milliseconds: Int) {
+        val normalized = PlaybackCacheConfig.normalize(milliseconds)
+        val context = getApplication<Application>()
+        PlaybackStateRepository.updatePlaybackCacheMilliseconds(normalized)
+        PlaybackStateRepository.appendLog("UI: 用户调整播放缓存为 ${normalized}ms")
+        viewModelScope.launch {
+            volumePreferencesRepository.savePlaybackCacheMilliseconds(normalized)
+        }
+        context.startService(AudioBridgeService.createPlaybackCacheIntent(context, normalized))
     }
 
     fun requestWindowsVolumeSnapshot() {

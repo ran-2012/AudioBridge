@@ -37,6 +37,8 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="16" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="12" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <TextBlock VerticalAlignment="Center" Text="编码" />
@@ -66,6 +68,23 @@
                        Foreground="#666"
                        TextWrapping="Wrap"
                        Text="修改配置后将用于后续音频采集与通信模块。当前版本已支持通过 ADB 查询已连接设备，并识别指定包名的 Android 音频应用是否正在运行。" />
+
+            <Border x:Name="DeviceFormatBorder"
+                    Grid.Row="14"
+                    Grid.ColumnSpan="3"
+                    Padding="12,8"
+                    CornerRadius="6"
+                    Background="#F5F5F5"
+                    BorderBrush="#CCCCCC"
+                    BorderThickness="1">
+                <StackPanel>
+                    <TextBlock FontWeight="SemiBold" Text="系统音频设备原生格式" />
+                    <TextBlock x:Name="DeviceFormatTextBlock"
+                               Margin="0,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="正在检测..." />
+                </StackPanel>
+            </Border>
         </Grid>
 
         <Border Grid.Row="2"

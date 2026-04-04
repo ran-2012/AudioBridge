@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import dev.ran.audiobridge.audio.AudioPlaybackManager
+import dev.ran.audiobridge.audio.PlaybackCacheConfig
 import dev.ran.audiobridge.data.VolumePreferencesRepository
 import dev.ran.audiobridge.model.BridgePacket
 import dev.ran.audiobridge.notification.NotificationController
@@ -31,12 +32,14 @@ class AudioBridgeService : Service() {
         private const val ACTION_START = "dev.ran.audiobridge.action.START"
         private const val ACTION_STOP = "dev.ran.audiobridge.action.STOP"
         private const val ACTION_SET_VOLUME = "dev.ran.audiobridge.action.SET_VOLUME"
+        private const val ACTION_SET_PLAYBACK_CACHE = "dev.ran.audiobridge.action.SET_PLAYBACK_CACHE"
         private const val ACTION_REQUEST_WINDOWS_VOLUME = "dev.ran.audiobridge.action.REQUEST_WINDOWS_VOLUME"
         private const val ACTION_SET_WINDOWS_MASTER_VOLUME = "dev.ran.audiobridge.action.SET_WINDOWS_MASTER_VOLUME"
         private const val ACTION_SET_WINDOWS_MASTER_MUTE = "dev.ran.audiobridge.action.SET_WINDOWS_MASTER_MUTE"
         private const val ACTION_SET_WINDOWS_SESSION_VOLUME = "dev.ran.audiobridge.action.SET_WINDOWS_SESSION_VOLUME"
         private const val ACTION_SET_WINDOWS_SESSION_MUTE = "dev.ran.audiobridge.action.SET_WINDOWS_SESSION_MUTE"
         private const val EXTRA_VOLUME = "extra_volume"
+        private const val EXTRA_PLAYBACK_CACHE_MILLISECONDS = "extra_playback_cache_milliseconds"
         private const val EXTRA_MUTED = "extra_muted"
         private const val EXTRA_SESSION_ID = "extra_session_id"
         private const val SERVER_PORT = 5000
@@ -52,6 +55,11 @@ class AudioBridgeService : Service() {
         fun createVolumeIntent(context: Context, volume: Float) = Intent(context, AudioBridgeService::class.java).apply {
             action = ACTION_SET_VOLUME
             putExtra(EXTRA_VOLUME, volume)
+        }
+
+        fun createPlaybackCacheIntent(context: Context, milliseconds: Int) = Intent(context, AudioBridgeService::class.java).apply {
+            action = ACTION_SET_PLAYBACK_CACHE
+            putExtra(EXTRA_PLAYBACK_CACHE_MILLISECONDS, PlaybackCacheConfig.normalize(milliseconds))
         }
 
         fun createRequestWindowsVolumeIntent(context: Context) = Intent(context, AudioBridgeService::class.java).apply {
@@ -105,6 +113,7 @@ class AudioBridgeService : Service() {
             ACTION_START -> startBridge()
             ACTION_STOP -> stopBridge()
             ACTION_SET_VOLUME -> updateVolume(intent.getFloatExtra(EXTRA_VOLUME, 1.0f))
+            ACTION_SET_PLAYBACK_CACHE -> updatePlaybackCacheMilliseconds(intent.getIntExtra(EXTRA_PLAYBACK_CACHE_MILLISECONDS, PlaybackCacheConfig.DEFAULT_MILLISECONDS))
             ACTION_REQUEST_WINDOWS_VOLUME -> requestWindowsVolumeSnapshot()
             ACTION_SET_WINDOWS_MASTER_VOLUME -> sendWindowsMasterVolume(intent.getFloatExtra(EXTRA_VOLUME, 0f))
             ACTION_SET_WINDOWS_MASTER_MUTE -> sendWindowsMasterMute(intent.getBooleanExtra(EXTRA_MUTED, false))
@@ -138,9 +147,13 @@ class AudioBridgeService : Service() {
 
         serverJob = serviceScope.launch {
             val initialVolume = volumePreferencesRepository.volumeFlow.first()
+            val initialPlaybackCacheMilliseconds = volumePreferencesRepository.playbackCacheMillisecondsFlow.first()
             playbackManager.updateVolume(initialVolume)
+            playbackManager.updatePlaybackCacheMilliseconds(initialPlaybackCacheMilliseconds)
             PlaybackStateRepository.updateVolume(initialVolume)
+            PlaybackStateRepository.updatePlaybackCacheMilliseconds(initialPlaybackCacheMilliseconds)
             PlaybackStateRepository.appendLog("Service: 已加载音量设置 ${(initialVolume * 100).toInt()}%")
+            PlaybackStateRepository.appendLog("Service: 已加载播放缓存 ${initialPlaybackCacheMilliseconds}ms")
 
             runCatching {
                 ServerSocket(SERVER_PORT).use { socket ->
@@ -202,9 +215,14 @@ class AudioBridgeService : Service() {
                 }
 
                 is BridgePacket.AudioFrame -> {
-                    playbackManager.write(packet)
+                    val result = playbackManager.write(packet)
                     PlaybackStateRepository.updateSequence(packet.sequence)
                     PlaybackStateRepository.updatePlayback(true, "后台播放中")
+                    if (result.trimmedBufferedAudio || result.droppedBytes > 0) {
+                        PlaybackStateRepository.appendLog(
+                            "Audio: 检测到播放积压，已丢弃旧音频 trimmed=${result.trimmedBufferedAudio} droppedBytes=${result.droppedBytes} cache=${PlaybackStateRepository.state.value.playbackCacheMilliseconds}ms sequence=${packet.sequence}",
+                        )
+                    }
                     if (packet.sequence == 1u || packet.sequence % 200u == 0u) {
                         PlaybackStateRepository.appendLog(
                             "Audio: 收到音频帧 sequence=${packet.sequence}, bytes=${packet.audioData.size}, ts=${packet.timestampMillis}",
@@ -254,6 +272,15 @@ class AudioBridgeService : Service() {
         PlaybackStateRepository.appendLog("Audio: 音量已更新为 ${(volume.coerceIn(0f, 1f) * 100).toInt()}%")
         serviceScope.launch {
             volumePreferencesRepository.saveVolume(volume)
+        }
+    }
+
+    private fun updatePlaybackCacheMilliseconds(milliseconds: Int) {
+        val normalized = playbackManager.updatePlaybackCacheMilliseconds(milliseconds)
+        PlaybackStateRepository.updatePlaybackCacheMilliseconds(normalized)
+        PlaybackStateRepository.appendLog("Audio: 播放缓存已更新为 ${normalized}ms")
+        serviceScope.launch {
+            volumePreferencesRepository.savePlaybackCacheMilliseconds(normalized)
         }
     }
 

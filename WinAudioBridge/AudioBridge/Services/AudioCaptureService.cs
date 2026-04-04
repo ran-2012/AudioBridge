@@ -25,6 +25,14 @@ public sealed class AudioCaptureService : IDisposable
 
     public WaveFormat GetDefaultLoopbackFormat()
     {
+        lock (_syncRoot)
+        {
+            if (_capture?.WaveFormat is not null)
+            {
+                return _capture.WaveFormat;
+            }
+        }
+
         using var probeCapture = new WasapiLoopbackCapture();
         return probeCapture.WaveFormat;
     }

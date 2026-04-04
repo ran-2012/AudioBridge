@@ -38,32 +38,7 @@
             </StackPanel>
         </StackPanel>
 
-        <Border Grid.Row="2"
-                Padding="16"
-                Background="#F7F7F7"
-                BorderBrush="#DDDDDD"
-                BorderThickness="1"
-                CornerRadius="8">
-            <StackPanel>
-                <TextBlock FontSize="16" FontWeight="SemiBold" Text="当前配置" />
-                <UniformGrid Margin="0,12,0,0" Columns="2" Rows="6">
-                    <TextBlock FontWeight="SemiBold" Text="编码" />
-                    <TextBlock Text="{Binding Encoding}" />
-                    <TextBlock FontWeight="SemiBold" Text="采样率" />
-                    <TextBlock Text="{Binding SampleRateText}" />
-                    <TextBlock FontWeight="SemiBold" Text="声道数" />
-                    <TextBlock Text="{Binding ChannelsText}" />
-                    <TextBlock FontWeight="SemiBold" Text="Buffer" />
-                    <TextBlock Text="{Binding BufferText}" />
-                    <TextBlock FontWeight="SemiBold" Text="Android 包名" />
-                    <TextBlock Text="{Binding AndroidPackageName}" />
-                    <TextBlock FontWeight="SemiBold" Text="优先设备" />
-                    <TextBlock Text="{Binding PreferredDeviceText}" />
-                </UniformGrid>
-            </StackPanel>
-        </Border>
-
-        <Grid Grid.Row="4">
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="1.1*" />
                 <ColumnDefinition Width="12" />
@@ -71,6 +46,31 @@
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0"
+                    Padding="16"
+                    Background="#F7F7F7"
+                    BorderBrush="#DDDDDD"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                <StackPanel>
+                    <TextBlock FontSize="16" FontWeight="SemiBold" Text="当前配置" />
+                    <UniformGrid Margin="0,12,0,0" Columns="2" Rows="6">
+                        <TextBlock FontWeight="SemiBold" Text="编码" />
+                        <TextBlock Text="{Binding Encoding}" />
+                        <TextBlock FontWeight="SemiBold" Text="采样率" />
+                        <TextBlock Text="{Binding SampleRateText}" />
+                        <TextBlock FontWeight="SemiBold" Text="声道数" />
+                        <TextBlock Text="{Binding ChannelsText}" />
+                        <TextBlock FontWeight="SemiBold" Text="Buffer" />
+                        <TextBlock Text="{Binding BufferText}" />
+                        <TextBlock FontWeight="SemiBold" Text="Android 包名" />
+                        <TextBlock Text="{Binding AndroidPackageName}" />
+                        <TextBlock FontWeight="SemiBold" Text="优先设备" />
+                        <TextBlock Text="{Binding PreferredDeviceText}" />
+                    </UniformGrid>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="2"
                     Padding="16"
                     Background="#FAFAFA"
                     BorderBrush="#E5E5E5"
@@ -82,9 +82,13 @@
                         <TextBlock FontWeight="SemiBold" Text="协调器状态" />
                         <TextBlock Text="{Binding CoordinatorStateText}" />
                         <TextBlock FontWeight="SemiBold" Text="状态说明" />
-                        <TextBlock Text="{Binding CoordinatorStatusMessage}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding CoordinatorStatusMessage}"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding CoordinatorStatusMessage}" />
                         <TextBlock FontWeight="SemiBold" Text="目标设备" />
-                        <TextBlock Text="{Binding TargetDeviceText}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding TargetDeviceText}"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding TargetDeviceText}" />
                         <TextBlock FontWeight="SemiBold" Text="传输状态" />
                         <TextBlock Text="{Binding TransportStatusText}" />
                         <TextBlock FontWeight="SemiBold" Text="采集状态" />
@@ -92,7 +96,9 @@
                         <TextBlock FontWeight="SemiBold" Text="音量监控" />
                         <TextBlock Text="{Binding WindowsVolumeMonitorText}" />
                         <TextBlock FontWeight="SemiBold" Text="主音量" />
-                        <TextBlock Text="{Binding WindowsMasterVolumeText}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding WindowsMasterVolumeText}"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding WindowsMasterVolumeText}" />
                         <TextBlock FontWeight="SemiBold" Text="主静音" />
                         <TextBlock Text="{Binding WindowsMasterMuteText}" />
                         <TextBlock FontWeight="SemiBold" Text="应用会话" />
@@ -102,39 +108,43 @@
                     </UniformGrid>
                 </StackPanel>
             </Border>
-
-            <Border Grid.Column="2"
-                    Padding="16"
-                    Background="#FAFAFA"
-                    BorderBrush="#E5E5E5"
-                    BorderThickness="1"
-                    CornerRadius="8">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="8" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <TextBlock FontSize="16" FontWeight="SemiBold" Text="诊断日志" />
-                    <ListBox Grid.Row="2"
-                             ItemsSource="{Binding RecentLogs}"
-                             BorderThickness="0"
-                             Background="Transparent"
-                             HorizontalContentAlignment="Stretch"
-                             ScrollViewer.VerticalScrollBarVisibility="Auto">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock FontFamily="Consolas"
-                                           FontSize="12"
-                                           Text="{Binding DisplayText}"
-                                           TextWrapping="Wrap"
-                                           Margin="0,0,0,6" />
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                </Grid>
-            </Border>
         </Grid>
+
+        <Border Grid.Row="4"
+                Padding="16"
+                Background="#FAFAFA"
+                BorderBrush="#E5E5E5"
+                BorderThickness="1"
+                CornerRadius="8">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="8" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <TextBlock FontSize="16" FontWeight="SemiBold" Text="诊断日志" />
+                <ListBox Grid.Row="2"
+                         ItemsSource="{Binding RecentLogs}"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         HorizontalContentAlignment="Stretch"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBox FontFamily="Consolas"
+                                     FontSize="12"
+                                     Text="{Binding DisplayText, Mode=OneWay}"
+                                     TextWrapping="Wrap"
+                                     Margin="0,0,0,6"
+                                     IsReadOnly="True"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Padding="0" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
+        </Border>
     </Grid>
 </Window>

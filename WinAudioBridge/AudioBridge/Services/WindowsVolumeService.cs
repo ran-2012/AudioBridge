@@ -7,6 +7,7 @@ namespace WpfApp1.Services;
 
 public sealed class WindowsVolumeService : IDisposable
 {
+    private const string SessionCommandIdPrefix = "wab-session";
     private readonly AppLogService _logService;
     private readonly VolumeIconService _iconService;
     private readonly object _syncRoot = new();
@@ -282,7 +283,9 @@ public sealed class WindowsVolumeService : IDisposable
             for (var index = 0; index < collection.Count; index++)
             {
                 using var session = collection[index];
-                if (!string.Equals(ResolveSessionId(session, unchecked((int)session.GetProcessID), ResolveProcessName(unchecked((int)session.GetProcessID))), sessionId, StringComparison.Ordinal))
+                var processId = unchecked((int)session.GetProcessID);
+                var processName = ResolveProcessName(processId);
+                if (!SessionIdsMatch(sessionId, session, processId, processName))
                 {
                     continue;
                 }
@@ -353,17 +356,126 @@ public sealed class WindowsVolumeService : IDisposable
     private static float ClampVolume(float volume) => Math.Clamp(volume, 0f, 1f);
 
     private static string ResolveSessionId(AudioSessionControl session, int processId, string processName)
+        => BuildSessionCommandId(session.GetSessionIdentifier, session.GetSessionInstanceIdentifier, processId, processName);
+
+    internal static string BuildSessionCommandId(string? sessionIdentifier, string? sessionInstanceIdentifier, int processId, string processName)
     {
-        if (!string.IsNullOrWhiteSpace(session.GetSessionInstanceIdentifier))
+        var normalizedSessionIdentifier = sessionIdentifier?.Trim();
+        var normalizedSessionInstanceIdentifier = sessionInstanceIdentifier?.Trim();
+        var normalizedProcessName = processName?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(normalizedSessionIdentifier) && string.IsNullOrWhiteSpace(normalizedSessionInstanceIdentifier))
         {
-            return session.GetSessionInstanceIdentifier;
+            return BuildLegacyProcessSessionId(processId, normalizedProcessName);
         }
 
-        if (!string.IsNullOrWhiteSpace(session.GetSessionIdentifier))
+        return string.Join(
+            '|',
+            SessionCommandIdPrefix,
+            $"sid={Uri.EscapeDataString(normalizedSessionIdentifier ?? string.Empty)}",
+            $"iid={Uri.EscapeDataString(normalizedSessionInstanceIdentifier ?? string.Empty)}",
+            $"pid={processId}",
+            $"pn={Uri.EscapeDataString(normalizedProcessName)}");
+    }
+
+    internal static bool SessionIdsMatch(string targetSessionId, AudioSessionControl session, int processId, string processName)
+    {
+        return SessionIdsMatch(
+            targetSessionId,
+            session.GetSessionIdentifier,
+            session.GetSessionInstanceIdentifier,
+            processId,
+            processName);
+    }
+
+    internal static bool SessionIdsMatch(string targetSessionId, string? sessionIdentifier, string? sessionInstanceIdentifier, int processId, string processName)
+    {
+        if (string.IsNullOrWhiteSpace(targetSessionId))
         {
-            return session.GetSessionIdentifier;
+            return false;
         }
 
+        var normalizedTargetSessionId = targetSessionId.Trim();
+        var normalizedSessionIdentifier = sessionIdentifier?.Trim() ?? string.Empty;
+        var normalizedSessionInstanceIdentifier = sessionInstanceIdentifier?.Trim() ?? string.Empty;
+        var normalizedProcessName = processName?.Trim() ?? string.Empty;
+        var currentCommandId = BuildSessionCommandId(normalizedSessionIdentifier, normalizedSessionInstanceIdentifier, processId, normalizedProcessName);
+
+        if (string.Equals(normalizedTargetSessionId, currentCommandId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (string.Equals(normalizedTargetSessionId, normalizedSessionInstanceIdentifier, StringComparison.Ordinal) ||
+            string.Equals(normalizedTargetSessionId, normalizedSessionIdentifier, StringComparison.Ordinal) ||
+            string.Equals(normalizedTargetSessionId, BuildLegacyProcessSessionId(processId, normalizedProcessName), StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!TryParseSessionCommandId(normalizedTargetSessionId, out var targetSessionIdentifier, out var targetSessionInstanceIdentifier, out var targetProcessId))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetSessionInstanceIdentifier) &&
+            string.Equals(targetSessionInstanceIdentifier, normalizedSessionInstanceIdentifier, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetSessionIdentifier) &&
+            string.Equals(targetSessionIdentifier, normalizedSessionIdentifier, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return targetProcessId == processId &&
+               string.IsNullOrWhiteSpace(targetSessionIdentifier) &&
+               string.IsNullOrWhiteSpace(targetSessionInstanceIdentifier);
+    }
+
+    private static bool TryParseSessionCommandId(string sessionId, out string sessionIdentifier, out string sessionInstanceIdentifier, out int processId)
+    {
+        sessionIdentifier = string.Empty;
+        sessionInstanceIdentifier = string.Empty;
+        processId = 0;
+
+        if (!sessionId.StartsWith(SessionCommandIdPrefix + "|", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var parts = sessionId.Split('|', StringSplitOptions.None);
+        foreach (var part in parts.Skip(1))
+        {
+            var separatorIndex = part.IndexOf('=');
+            if (separatorIndex <= 0)
+            {
+                continue;
+            }
+
+            var key = part[..separatorIndex];
+            var value = part[(separatorIndex + 1)..];
+            switch (key)
+            {
+                case "sid":
+                    sessionIdentifier = Uri.UnescapeDataString(value);
+                    break;
+                case "iid":
+                    sessionInstanceIdentifier = Uri.UnescapeDataString(value);
+                    break;
+                case "pid":
+                    _ = int.TryParse(value, out processId);
+                    break;
+            }
+        }
+
+        return true;
+    }
+
+    private static string BuildLegacyProcessSessionId(int processId, string processName)
+    {
         return $"pid:{processId}:{processName}";
     }
 

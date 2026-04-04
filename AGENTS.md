@@ -114,3 +114,11 @@ Recommended next additions:
 - Windows transport packet encode/decode tests
 - Windows auto-reconnect state transition tests
 - shared protocol sample fixtures
+
+
+## Other Documentation
+
+- WinAudioBridge README: `WinAudioBridge/README.md`
+  - If you want to build or test the Windows side, see this README for detailed instructions and notes.
+- Android README: `AudioBridge/README.md`
+  - If you want to build or test the Android side, see this README for detailed instructions and notes.

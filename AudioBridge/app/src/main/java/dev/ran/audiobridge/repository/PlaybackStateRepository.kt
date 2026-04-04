@@ -47,6 +47,10 @@ object PlaybackStateRepository {
         mutableState.value = mutableState.value.copy(volume = volume)
     }
 
+    fun updatePlaybackCacheMilliseconds(milliseconds: Int) {
+        mutableState.value = mutableState.value.copy(playbackCacheMilliseconds = milliseconds)
+    }
+
     fun updateSession(sessionInfo: PlaybackSessionInfo, statusMessage: String) {
         mutableState.value = mutableState.value.copy(
             sessionInfo = sessionInfo,

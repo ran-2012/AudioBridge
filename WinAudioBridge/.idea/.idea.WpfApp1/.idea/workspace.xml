@@ -8,17 +8,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ad95633a-aa91-4259-a7c5-31d540acda1c" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/../AudioBridge/app/src/main/java/dev/ran/audiobridge/network/WindowsVolumeJsonCodec.kt" beforeDir="false" afterPath="$PROJECT_DIR$/../AudioBridge/app/src/main/java/dev/ran/audiobridge/network/WindowsVolumeJsonCodec.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../AudioBridge/app/src/main/java/dev/ran/audiobridge/repository/PlaybackStateRepository.kt" beforeDir="false" afterPath="$PROJECT_DIR$/../AudioBridge/app/src/main/java/dev/ran/audiobridge/repository/PlaybackStateRepository.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../AudioBridge/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/../AudioBridge/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../AudioBridge/app/src/main/AndroidManifest.xml" beforeDir="false" afterPath="$PROJECT_DIR$/../AudioBridge/app/src/main/AndroidManifest.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/.idea.WpfApp1/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/.idea.WpfApp1/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/AudioBridge/App.xaml.cs" beforeDir="false" afterPath="$PROJECT_DIR$/AudioBridge/App.xaml.cs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/AudioBridge/Models/AppSettings.cs" beforeDir="false" afterPath="$PROJECT_DIR$/AudioBridge/Models/AppSettings.cs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/AudioBridge/Services/SettingsService.cs" beforeDir="false" afterPath="$PROJECT_DIR$/AudioBridge/Services/SettingsService.cs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/AudioBridge/Services/StreamingCoordinator.cs" beforeDir="false" afterPath="$PROJECT_DIR$/AudioBridge/Services/StreamingCoordinator.cs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/AudioBridge/Services/VolumeIconService.cs" beforeDir="false" afterPath="$PROJECT_DIR$/AudioBridge/Services/VolumeIconService.cs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/AudioBridge/SettingsWindow.xaml" beforeDir="false" afterPath="$PROJECT_DIR$/AudioBridge/SettingsWindow.xaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/AudioBridge/SettingsWindow.xaml.cs" beforeDir="false" afterPath="$PROJECT_DIR$/AudioBridge/SettingsWindow.xaml.cs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../doc/开发状态.md" beforeDir="false" afterPath="$PROJECT_DIR$/../doc/开发状态.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -110,7 +102,7 @@
       <option name="presentableId" value="Default" />
       <updated>1774616295598</updated>
       <workItem from="1774616296753" duration="14346000" />
-      <workItem from="1774774590592" duration="1923000" />
+      <workItem from="1774774590592" duration="3212000" />
     </task>
     <task id="LOCAL-00001" summary="init">
       <option name="closed" value="true" />

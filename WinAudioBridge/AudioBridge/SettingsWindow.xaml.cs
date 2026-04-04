@@ -1,6 +1,10 @@
 using System.Windows;
+using System.Windows.Media;
+using NAudio.Wave;
 using WpfApp1.Models;
 using WpfApp1.Services;
+using Color = System.Windows.Media.Color;
+using SystemColors = System.Windows.SystemColors;
 
 namespace WpfApp1;
 
@@ -9,13 +13,15 @@ public partial class SettingsWindow : Window
     private readonly AdbService _adbService;
     private readonly AppLogService _logService;
     private readonly SettingsService _settingsService;
+    private readonly AudioCaptureService _audioCaptureService;
     private string _preferredDeviceSerial = string.Empty;
 
-    public SettingsWindow(SettingsService settingsService, AdbService adbService, AppLogService logService)
+    public SettingsWindow(SettingsService settingsService, AdbService adbService, AppLogService logService, AudioCaptureService audioCaptureService)
     {
         _settingsService = settingsService;
         _adbService = adbService;
         _logService = logService;
+        _audioCaptureService = audioCaptureService;
         InitializeComponent();
         InitializeOptions();
         LoadCurrentValues();
@@ -44,7 +50,48 @@ public partial class SettingsWindow : Window
 
     private async void SettingsWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        LoadDeviceFormatInfo();
         await RefreshDevicesAsync();
+    }
+
+    private void LoadDeviceFormatInfo()
+    {
+        try
+        {
+            var fmt = _audioCaptureService.GetDefaultLoopbackFormat();
+            bool isSupported =
+                (fmt.Encoding == WaveFormatEncoding.IeeeFloat && fmt.BitsPerSample == 32) ||
+                (fmt.Encoding == WaveFormatEncoding.Pcm && fmt.BitsPerSample == 16);
+
+            string encodingName = fmt.Encoding switch
+            {
+                WaveFormatEncoding.IeeeFloat => "IeeeFloat",
+                WaveFormatEncoding.Pcm => "Pcm",
+                _ => fmt.Encoding.ToString()
+            };
+
+            if (isSupported)
+            {
+                DeviceFormatBorder.Background = new SolidColorBrush(Color.FromRgb(0xE8, 0xF5, 0xE9));
+                DeviceFormatBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(0x81, 0xC7, 0x84));
+                DeviceFormatTextBlock.Foreground = new SolidColorBrush(Color.FromRgb(0x2E, 0x7D, 0x32));
+                DeviceFormatTextBlock.Text =
+                    $"✔ 格式受支持：{encodingName} / {fmt.SampleRate} Hz / {fmt.Channels} 声道 / {fmt.BitsPerSample}bit";
+            }
+            else
+            {
+                DeviceFormatBorder.Background = new SolidColorBrush(Color.FromRgb(0xFF, 0xF3, 0xE0));
+                DeviceFormatBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xB7, 0x4D));
+                DeviceFormatTextBlock.Foreground = new SolidColorBrush(Color.FromRgb(0xE6, 0x51, 0x00));
+                DeviceFormatTextBlock.Text =
+                    $"⚠ 格式不受支持：{encodingName} / {fmt.SampleRate} Hz / {fmt.Channels} 声道 / {fmt.BitsPerSample}bit。当前仅支持 IeeeFloat/32bit 和 Pcm/16bit，准备链路时将失败。";
+            }
+        }
+        catch (Exception ex)
+        {
+            DeviceFormatTextBlock.Foreground = SystemColors.ControlTextBrush;
+            DeviceFormatTextBlock.Text = $"无法读取设备格式：{ex.Message}";
+        }
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
