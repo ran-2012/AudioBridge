@@ -15,18 +15,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -66,6 +68,7 @@ fun AudioBridgeScreen(
     uiState: PlaybackUiState,
     onStartService: () -> Unit,
     onStopService: () -> Unit,
+    onRestartService: () -> Unit,
     onVolumeChanged: (Float) -> Unit,
     onPlaybackCacheChanged: (Int) -> Unit,
     onRequestWindowsVolumeSnapshot: () -> Unit,
@@ -75,7 +78,6 @@ fun AudioBridgeScreen(
     onWindowsSessionMuteChanged: (String, Boolean) -> Unit,
 ) {
     var currentPage by rememberSaveable { mutableStateOf(AudioBridgePage.Main.name) }
-    var menuExpanded by rememberSaveable { mutableStateOf(false) }
     val page = remember(currentPage) {
         if (currentPage == AudioBridgePage.Details.name) {
             AudioBridgePage.Details
@@ -94,31 +96,29 @@ fun AudioBridgeScreen(
                     actions = {
                         StatusBadgeCompact(status = runningStatus)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Box {
-                            IconButton(onClick = { menuExpanded = true }) {
-                                Text("⋯", style = MaterialTheme.typography.headlineMedium)
-                            }
-                            DropdownMenu(
-                                expanded = menuExpanded,
-                                onDismissRequest = { menuExpanded = false },
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("当前会话与日志") },
-                                    onClick = {
-                                        menuExpanded = false
-                                        currentPage = AudioBridgePage.Details.name
-                                    },
-                                )
-                            }
+                        IconButton(onClick = onRestartService) {
+                            Icon(
+                                imageVector = Icons.Filled.Refresh,
+                                contentDescription = "重启后台服务",
+                            )
+                        }
+                        IconButton(onClick = { currentPage = AudioBridgePage.Details.name }) {
+                            Icon(
+                                imageVector = Icons.Filled.MoreVert,
+                                contentDescription = "查看当前会话与日志",
+                            )
                         }
                     },
                 )
             } else {
                 TopAppBar(
                     title = { Text("当前会话与日志") },
-                    navigationIcon = {
-                        TextButton(onClick = { currentPage = AudioBridgePage.Main.name }) {
-                            Text("返回")
+                    actions = {
+                        IconButton(onClick = { currentPage = AudioBridgePage.Main.name }) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "关闭日志页面",
+                            )
                         }
                     },
                 )

@@ -58,6 +58,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         context.startService(AudioBridgeService.createStopIntent(context))
     }
 
+    fun restartService() {
+        val context = getApplication<Application>()
+        PlaybackStateRepository.appendLog("UI: 用户请求重启后台播放")
+        context.startService(AudioBridgeService.createRestartIntent(context))
+    }
+
     fun updateVolume(volume: Float) {
         val context = getApplication<Application>()
         PlaybackStateRepository.updateVolume(volume)

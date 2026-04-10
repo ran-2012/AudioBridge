@@ -31,6 +31,7 @@ class AudioBridgeService : Service() {
     companion object {
         private const val ACTION_START = "dev.ran.audiobridge.action.START"
         private const val ACTION_STOP = "dev.ran.audiobridge.action.STOP"
+        private const val ACTION_RESTART = "dev.ran.audiobridge.action.RESTART"
         private const val ACTION_SET_VOLUME = "dev.ran.audiobridge.action.SET_VOLUME"
         private const val ACTION_SET_PLAYBACK_CACHE = "dev.ran.audiobridge.action.SET_PLAYBACK_CACHE"
         private const val ACTION_REQUEST_WINDOWS_VOLUME = "dev.ran.audiobridge.action.REQUEST_WINDOWS_VOLUME"
@@ -50,6 +51,10 @@ class AudioBridgeService : Service() {
 
         fun createStopIntent(context: Context) = Intent(context, AudioBridgeService::class.java).apply {
             action = ACTION_STOP
+        }
+
+        fun createRestartIntent(context: Context) = Intent(context, AudioBridgeService::class.java).apply {
+            action = ACTION_RESTART
         }
 
         fun createVolumeIntent(context: Context, volume: Float) = Intent(context, AudioBridgeService::class.java).apply {
@@ -112,6 +117,7 @@ class AudioBridgeService : Service() {
         when (intent?.action) {
             ACTION_START -> startBridge()
             ACTION_STOP -> stopBridge()
+            ACTION_RESTART -> restartBridge()
             ACTION_SET_VOLUME -> updateVolume(intent.getFloatExtra(EXTRA_VOLUME, 1.0f))
             ACTION_SET_PLAYBACK_CACHE -> updatePlaybackCacheMilliseconds(intent.getIntExtra(EXTRA_PLAYBACK_CACHE_MILLISECONDS, PlaybackCacheConfig.DEFAULT_MILLISECONDS))
             ACTION_REQUEST_WINDOWS_VOLUME -> requestWindowsVolumeSnapshot()
@@ -376,7 +382,13 @@ class AudioBridgeService : Service() {
 
     private fun nextRequestId(): UInt = requestIdGenerator.getAndIncrement().toUInt()
 
-    private fun stopBridge() {
+    private fun restartBridge() {
+        PlaybackStateRepository.appendLog("Service: 正在重启后台服务")
+        stopBridge(stopSelfAfterStop = false)
+        startBridge()
+    }
+
+    private fun stopBridge(stopSelfAfterStop: Boolean = true) {
         PlaybackStateRepository.appendLog("Service: 正在停止后台服务")
         serverJob?.cancel()
         serverJob = null
@@ -389,6 +401,8 @@ class AudioBridgeService : Service() {
         PlaybackStateRepository.updateServiceRunning(false, "后台服务已停止")
         PlaybackStateRepository.appendLog("Service: 后台服务已停止，监听与播放资源已释放")
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        if (stopSelfAfterStop) {
+            stopSelf()
+        }
     }
 }
