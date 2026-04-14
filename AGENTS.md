@@ -87,6 +87,8 @@ See:
 - Keep Windows and Android protocol behavior consistent.
 - When changing protocol fields, update both ends and tests together.
 - Prefer pure functions and isolated logic for new testable behavior.
+- When adding code, follow existing style and patterns in the relevant module.
+- If updating document is needed if the change affects user-facing behavior, protocol, or test strategy, update `doc/开发状态.md` and `doc/测试方案.md` as appropriate.
 
 ## Practical Notes
 

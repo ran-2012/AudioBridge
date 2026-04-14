@@ -1,6 +1,7 @@
 package dev.ran.audiobridge.repository
 
 import android.util.Log
+import dev.ran.audiobridge.model.HiddenWindowsApp
 import dev.ran.audiobridge.model.PlaybackSessionInfo
 import dev.ran.audiobridge.model.PlaybackUiState
 import dev.ran.audiobridge.model.WindowsAppVolumeSession
@@ -84,6 +85,16 @@ object PlaybackStateRepository {
             windowsVolumeLoading = false,
             windowsVolumeStatusMessage = statusMessage,
             windowsVolumeErrorMessage = null,
+        )
+    }
+
+    fun updateHiddenWindowsApps(
+        hiddenProcessNames: Set<String>,
+        hiddenWindowsApps: List<HiddenWindowsApp>,
+    ) {
+        mutableState.value = mutableState.value.copy(
+            hiddenProcessNames = hiddenProcessNames,
+            hiddenWindowsApps = hiddenWindowsApps.sortedBy { it.displayName.lowercase() },
         )
     }
 

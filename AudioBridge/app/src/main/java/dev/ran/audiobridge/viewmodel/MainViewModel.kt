@@ -5,8 +5,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ran.audiobridge.audio.PlaybackCacheConfig
 import dev.ran.audiobridge.data.VolumePreferencesRepository
+import dev.ran.audiobridge.model.HiddenWindowsAppSupport
+import dev.ran.audiobridge.model.WindowsAppVolumeSession
 import dev.ran.audiobridge.repository.PlaybackStateRepository
 import dev.ran.audiobridge.service.AudioBridgeService
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -31,6 +34,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             volumePreferencesRepository.playbackCacheMillisecondsFlow.collect { milliseconds ->
                 PlaybackStateRepository.updatePlaybackCacheMilliseconds(milliseconds)
+            }
+        }
+
+        viewModelScope.launch {
+            combine(
+                volumePreferencesRepository.hiddenProcessNamesFlow,
+                volumePreferencesRepository.hiddenWindowsAppsFlow,
+            ) { hiddenProcessNames, hiddenWindowsApps ->
+                hiddenProcessNames to hiddenWindowsApps
+            }.collect { (hiddenProcessNames, hiddenWindowsApps) ->
+                PlaybackStateRepository.updateHiddenWindowsApps(hiddenProcessNames, hiddenWindowsApps)
+            }
+        }
+
+        viewModelScope.launch {
+            uiState.collect { state ->
+                HiddenWindowsAppSupport.distinctSessionsByProcessName(state.windowsVolumeCatalog.sessions)
+                    .forEach { session ->
+                        val processName = session.processName.trim()
+                        if (!state.hiddenProcessNames.contains(processName)) {
+                            return@forEach
+                        }
+
+                        val existing = state.hiddenWindowsApps.firstOrNull { it.processName == processName }
+                        val updated = HiddenWindowsAppSupport.buildHiddenWindowsApp(session, existing) ?: return@forEach
+                        if (existing != updated) {
+                            volumePreferencesRepository.updateHiddenWindowsAppMetadata(updated)
+                        }
+                    }
             }
         }
     }
@@ -113,5 +145,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         PlaybackStateRepository.appendLog("UI: 用户切换应用静音 sessionId=$sessionId 为 $isMuted")
         context.startService(AudioBridgeService.createWindowsSessionMuteIntent(context, sessionId, isMuted))
+    }
+
+    fun hideWindowsApp(session: WindowsAppVolumeSession) {
+        val hiddenApp = HiddenWindowsAppSupport.buildHiddenWindowsApp(
+            session = session,
+            existing = uiState.value.hiddenWindowsApps.firstOrNull { it.processName == session.processName.trim() },
+        ) ?: return
+
+        PlaybackStateRepository.appendLog("UI: 用户隐藏应用 processName=${hiddenApp.processName}")
+        viewModelScope.launch {
+            volumePreferencesRepository.hideWindowsApp(hiddenApp)
+        }
+    }
+
+    fun unhideWindowsApp(processName: String) {
+        val normalizedProcessName = processName.trim()
+        if (normalizedProcessName.isBlank()) {
+            return
+        }
+
+        PlaybackStateRepository.appendLog("UI: 用户取消隐藏应用 processName=$normalizedProcessName")
+        viewModelScope.launch {
+            volumePreferencesRepository.unhideWindowsApp(normalizedProcessName)
+        }
     }
 }

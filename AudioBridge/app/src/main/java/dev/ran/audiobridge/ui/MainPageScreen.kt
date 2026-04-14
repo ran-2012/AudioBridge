@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +30,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
+import dev.ran.audiobridge.model.HiddenWindowsAppSupport
 
 @Composable
 internal fun MainPageScreen(
@@ -87,12 +90,13 @@ private fun PhoneMainPage(
         modifier = Modifier
             .fillMaxSize()
             .padding(contentPadding)
-            .padding(16.dp),
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         RunningStatusCard(uiState = uiState)
         PlaybackVolumeCard(uiState = uiState, onVolumeChanged = onVolumeChanged, onPlaybackCacheChanged = onPlaybackCacheChanged)
-        WindowsVolumeControlCard(
+        PhoneWindowsVolumeControlCard(
             uiState = uiState,
             onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
             onWindowsMasterVolumeChanged = onWindowsMasterVolumeChanged,
@@ -100,6 +104,136 @@ private fun PhoneMainPage(
             onWindowsSessionVolumeChanged = onWindowsSessionVolumeChanged,
             onWindowsSessionMuteChanged = onWindowsSessionMuteChanged,
         )
+    }
+}
+
+@Composable
+private fun PhoneWindowsVolumeControlCard(
+    uiState: PlaybackUiState,
+    onRequestWindowsVolumeSnapshot: () -> Unit,
+    onWindowsMasterVolumeChanged: (Float) -> Unit,
+    onWindowsMasterMuteChanged: (Boolean) -> Unit,
+    onWindowsSessionVolumeChanged: (String, Float) -> Unit,
+    onWindowsSessionMuteChanged: (String, Boolean) -> Unit,
+) {
+    val visibleSessions = HiddenWindowsAppSupport.filterVisibleSessions(
+        sessions = uiState.windowsVolumeCatalog.sessions,
+        hiddenProcessNames = uiState.hiddenProcessNames,
+    )
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Windows 音量控制", style = MaterialTheme.typography.titleMedium)
+            Text("状态：${uiState.windowsVolumeStatusMessage}")
+            Text("最近同步：${formatTimestamp(uiState.windowsVolumeCatalog.capturedAtMillis)}")
+            uiState.windowsVolumeErrorMessage?.takeIf { it.isNotBlank() }?.let { error ->
+                Text(text = error, color = MaterialTheme.colorScheme.error)
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilledTonalButton(
+                    onClick = onRequestWindowsVolumeSnapshot,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (uiState.windowsVolumeLoading) "同步中..." else "刷新")
+                }
+                OutlinedButton(
+                    onClick = { onWindowsMasterMuteChanged(!uiState.windowsVolumeCatalog.masterVolume.isMuted) },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (uiState.windowsVolumeCatalog.masterVolume.isMuted) "取消静音" else "静音")
+                }
+            }
+
+            Text("设备：${uiState.windowsVolumeCatalog.masterVolume.deviceName}")
+            Text("主音量：${(uiState.windowsVolumeCatalog.masterVolume.volume * 100).toInt()}% / ${if (uiState.windowsVolumeCatalog.masterVolume.isMuted) "静音" else "未静音"}")
+            Slider(
+                value = uiState.windowsVolumeCatalog.masterVolume.volume,
+                onValueChange = onWindowsMasterVolumeChanged,
+                valueRange = 0f..1f,
+            )
+
+            Text(
+                text = "应用音频 · ${visibleSessions.size} 个",
+                style = MaterialTheme.typography.titleSmall,
+            )
+
+            if (visibleSessions.isEmpty()) {
+                Text("当前还没有可展示的 Windows 应用音量会话。")
+            } else {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    visibleSessions.forEach { session ->
+                        PhoneWindowsSessionCard(
+                            session = session,
+                            onVolumeChanged = { volume -> onWindowsSessionVolumeChanged(session.sessionId, volume) },
+                            onToggleMute = { onWindowsSessionMuteChanged(session.sessionId, !session.isMuted) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhoneWindowsSessionCard(
+    session: WindowsAppVolumeSession,
+    onVolumeChanged: (Float) -> Unit,
+    onToggleMute: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SessionIcon(session)
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = session.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = session.processName.ifBlank { "unknown" },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            Text("音量：${(session.volume * 100).toInt()}%")
+            Slider(
+                value = session.volume,
+                onValueChange = onVolumeChanged,
+                valueRange = 0f..1f,
+            )
+            OutlinedButton(
+                onClick = onToggleMute,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (session.isMuted) "取消静音" else "静音")
+            }
+        }
     }
 }
 
@@ -230,6 +364,11 @@ private fun TabletSessionsCard(
     onWindowsSessionVolumeChanged: (String, Float) -> Unit,
     onWindowsSessionMuteChanged: (String, Boolean) -> Unit,
 ) {
+    val visibleSessions = HiddenWindowsAppSupport.filterVisibleSessions(
+        sessions = uiState.windowsVolumeCatalog.sessions,
+        hiddenProcessNames = uiState.hiddenProcessNames,
+    )
+
     Card(
         modifier = modifier.fillMaxWidth(),
     ) {
@@ -248,7 +387,7 @@ private fun TabletSessionsCard(
 //                Text("${uiState.windowsVolumeCatalog.sessions.size} 个", style = MaterialTheme.typography.bodyMedium)
 //            }
 
-            if (uiState.windowsVolumeCatalog.sessions.isEmpty()) {
+            if (visibleSessions.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("当前还没有可展示的 Windows 应用音量会话。")
                 }
@@ -258,7 +397,7 @@ private fun TabletSessionsCard(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(
-                        items = uiState.windowsVolumeCatalog.sessions,
+                        items = visibleSessions,
                         key = { session -> session.sessionId },
                     ) { session ->
                         TabletWindowsSessionCard(

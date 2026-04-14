@@ -23,6 +23,7 @@ public partial class App : System.Windows.Application
 	private MainWindow? _mainWindow;
 	private SettingsWindow? _settingsWindow;
 	private bool _isExiting;
+	private bool _cleanupCompleted;
 
 	protected override void OnStartup(StartupEventArgs e)
 	{
@@ -90,11 +91,7 @@ public partial class App : System.Windows.Application
 		}
 
 		_trayService?.Dispose();
-		_windowsVolumeService?.Dispose();
-		_streamingCoordinator?.Dispose();
-		_singleInstanceMutex?.ReleaseMutex();
-		_singleInstanceMutex?.Dispose();
-		_singleInstanceMutex = null;
+		ReleaseSingleInstanceMutex();
 		base.OnExit(e);
 	}
 
@@ -168,12 +165,87 @@ public partial class App : System.Windows.Application
 		_settingsWindow.Activate();
 	}
 
-	private void ExitApplication()
+	private async void ExitApplication()
 	{
+		if (!Dispatcher.CheckAccess())
+		{
+			_ = Dispatcher.InvokeAsync(ExitApplication);
+			return;
+		}
+
+		if (_isExiting)
+		{
+			return;
+		}
+
 		_isExiting = true;
+
+		try
+		{
+			await CleanupBeforeShutdownAsync();
+		}
+		finally
+		{
+			Shutdown();
+		}
+	}
+
+	private async Task CleanupBeforeShutdownAsync()
+	{
+		if (_cleanupCompleted)
+		{
+			return;
+		}
+
+		if (_settingsService is not null)
+		{
+			_settingsService.SettingsChanged -= SettingsService_SettingsChanged;
+		}
+
+		_logService?.Info("App", "应用正在退出，开始释放资源。 ");
+
 		_trayService?.Dispose();
+		_trayService = null;
+
 		_settingsWindow?.Close();
+		_settingsWindow = null;
+
 		_mainWindow?.Close();
-		Shutdown();
+		_mainWindow = null;
+
+		if (_streamingCoordinator is not null)
+		{
+			await _streamingCoordinator.DisposeAsync();
+			_streamingCoordinator = null;
+		}
+
+		if (_windowsVolumeService is not null)
+		{
+			await _windowsVolumeService.DisposeAsync();
+			_windowsVolumeService = null;
+		}
+
+		_cleanupCompleted = true;
+		_logService?.Info("App", "应用退出清理完成。 ");
+	}
+
+	private void ReleaseSingleInstanceMutex()
+	{
+		if (_singleInstanceMutex is null)
+		{
+			return;
+		}
+
+		try
+		{
+			_singleInstanceMutex.ReleaseMutex();
+		}
+		catch (ApplicationException)
+		{
+			// ignore
+		}
+
+		_singleInstanceMutex.Dispose();
+		_singleInstanceMutex = null;
 	}
 }

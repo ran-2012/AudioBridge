@@ -4,6 +4,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.PowerManager
+import android.os.SystemClock
 import dev.ran.audiobridge.audio.AudioPlaybackManager
 import dev.ran.audiobridge.audio.PlaybackCacheConfig
 import dev.ran.audiobridge.data.VolumePreferencesRepository
@@ -44,6 +46,8 @@ class AudioBridgeService : Service() {
         private const val EXTRA_MUTED = "extra_muted"
         private const val EXTRA_SESSION_ID = "extra_session_id"
         private const val SERVER_PORT = 5000
+        private const val HEARTBEAT_LOG_INTERVAL = 12
+        private const val IDLE_RESUME_LOG_THRESHOLD_MILLIS = 5_000L
 
         fun createStartIntent(context: Context) = Intent(context, AudioBridgeService::class.java).apply {
             action = ACTION_START
@@ -104,12 +108,21 @@ class AudioBridgeService : Service() {
     private var activeClientOutputStream: OutputStream? = null
     private val requestIdGenerator = AtomicInteger(1)
     private val outputLock = Any()
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var lastPacketElapsedRealtime: Long = 0L
+    private var heartbeatCount: Int = 0
 
     override fun onCreate() {
         super.onCreate()
         notificationController = NotificationController(this)
         volumePreferencesRepository = VolumePreferencesRepository(this)
         notificationController.ensureChannel()
+        wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager).newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "$packageName:AudioBridgeReceiveLoop",
+        ).apply {
+            setReferenceCounted(false)
+        }
         PlaybackStateRepository.appendLog("Service: onCreate 完成，通知通道已就绪")
     }
 
@@ -143,6 +156,10 @@ class AudioBridgeService : Service() {
             PlaybackStateRepository.appendLog("Service: 后台服务已在运行，忽略重复启动")
             return
         }
+
+        acquireWakeLock()
+        lastPacketElapsedRealtime = SystemClock.elapsedRealtime()
+        heartbeatCount = 0
 
         startForeground(
             NotificationController.NOTIFICATION_ID,
@@ -208,12 +225,17 @@ class AudioBridgeService : Service() {
 
     private fun handleClient(client: java.net.Socket) {
         val inputStream = client.getInputStream()
+        lastPacketElapsedRealtime = SystemClock.elapsedRealtime()
         while (!client.isClosed) {
             when (val packet = protocolReader.readPacket(inputStream)) {
                 is BridgePacket.SessionInit -> {
+                    val idleMillis = markPacketReceived()
                     PlaybackStateRepository.appendLog(
                         "Protocol: 收到 SessionInit encoding=${packet.encodingCode}, sampleRate=${packet.sampleRate}, channels=${packet.channels}, bits=${packet.bitsPerSample}, buffer=${packet.bufferMilliseconds}ms",
                     )
+                    if (idleMillis >= IDLE_RESUME_LOG_THRESHOLD_MILLIS) {
+                        PlaybackStateRepository.appendLog("Protocol: 空闲 ${idleMillis}ms 后重新收到 SessionInit")
+                    }
                     val sessionInfo = playbackManager.configure(packet)
                     PlaybackStateRepository.updateSession(sessionInfo, "收到 SessionInit，播放参数已初始化")
                     PlaybackStateRepository.updatePlayback(true, "已开始后台播放")
@@ -221,9 +243,13 @@ class AudioBridgeService : Service() {
                 }
 
                 is BridgePacket.AudioFrame -> {
+                    val idleMillis = markPacketReceived()
                     val result = playbackManager.write(packet)
                     PlaybackStateRepository.updateSequence(packet.sequence)
                     PlaybackStateRepository.updatePlayback(true, "后台播放中")
+                    if (idleMillis >= IDLE_RESUME_LOG_THRESHOLD_MILLIS) {
+                        PlaybackStateRepository.appendLog("Audio: 空闲 ${idleMillis}ms 后恢复收到音频，sequence=${packet.sequence}")
+                    }
                     if (result.trimmedBufferedAudio || result.droppedBytes > 0) {
                         PlaybackStateRepository.appendLog(
                             "Audio: 检测到播放积压，已丢弃旧音频 trimmed=${result.trimmedBufferedAudio} droppedBytes=${result.droppedBytes} cache=${PlaybackStateRepository.state.value.playbackCacheMilliseconds}ms sequence=${packet.sequence}",
@@ -236,7 +262,18 @@ class AudioBridgeService : Service() {
                     }
                 }
 
+                BridgePacket.Heartbeat -> {
+                    val idleMillis = markPacketReceived()
+                    heartbeatCount += 1
+                    if (heartbeatCount == 1 || heartbeatCount % HEARTBEAT_LOG_INTERVAL == 0) {
+                        PlaybackStateRepository.appendLog(
+                            "Protocol: 收到保活心跳 heartbeatCount=$heartbeatCount idle=${idleMillis}ms",
+                        )
+                    }
+                }
+
                 is BridgePacket.VolumeCatalogSnapshot -> {
+                    markPacketReceived()
                     PlaybackStateRepository.updateWindowsVolumeCatalog(
                         packet.catalog,
                         "已同步 Windows 音量目录（${packet.catalog.sessions.size} 个应用）",
@@ -245,6 +282,7 @@ class AudioBridgeService : Service() {
                 }
 
                 is BridgePacket.VolumeSessionDelta -> {
+                    markPacketReceived()
                     when {
                         packet.masterVolume != null -> {
                             PlaybackStateRepository.updateWindowsMasterVolume(packet.masterVolume, "Windows 主音量已同步")
@@ -263,6 +301,7 @@ class AudioBridgeService : Service() {
                 }
 
                 is BridgePacket.CommandAck -> {
+                    markPacketReceived()
                     PlaybackStateRepository.applyWindowsCommandAck(packet.ack)
                     PlaybackStateRepository.appendLog(
                         "Protocol: 收到命令回执 requestId=${packet.ack.requestId} success=${packet.ack.success} code=${packet.ack.errorCode}",
@@ -382,6 +421,29 @@ class AudioBridgeService : Service() {
 
     private fun nextRequestId(): UInt = requestIdGenerator.getAndIncrement().toUInt()
 
+    private fun markPacketReceived(): Long {
+        val now = SystemClock.elapsedRealtime()
+        val idleMillis = if (lastPacketElapsedRealtime > 0L) now - lastPacketElapsedRealtime else 0L
+        lastPacketElapsedRealtime = now
+        return idleMillis
+    }
+
+    private fun acquireWakeLock() {
+        val lock = wakeLock ?: return
+        if (!lock.isHeld) {
+            lock.acquire()
+            PlaybackStateRepository.appendLog("Service: 已获取 PARTIAL_WAKE_LOCK，锁屏时保持接收线程活跃")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        val lock = wakeLock ?: return
+        if (lock.isHeld) {
+            lock.release()
+            PlaybackStateRepository.appendLog("Service: 已释放 PARTIAL_WAKE_LOCK")
+        }
+    }
+
     private fun restartBridge() {
         PlaybackStateRepository.appendLog("Service: 正在重启后台服务")
         stopBridge(stopSelfAfterStop = false)
@@ -398,6 +460,7 @@ class AudioBridgeService : Service() {
             activeClientOutputStream = null
         }
         playbackManager.release()
+        releaseWakeLock()
         PlaybackStateRepository.updateServiceRunning(false, "后台服务已停止")
         PlaybackStateRepository.appendLog("Service: 后台服务已停止，监听与播放资源已释放")
         stopForeground(STOP_FOREGROUND_REMOVE)

@@ -34,6 +34,8 @@ class MainActivity : ComponentActivity() {
                     onWindowsMasterMuteChanged = viewModel::updateWindowsMasterMute,
                     onWindowsSessionVolumeChanged = viewModel::updateWindowsSessionVolume,
                     onWindowsSessionMuteChanged = viewModel::updateWindowsSessionMute,
+                    onHideWindowsApp = viewModel::hideWindowsApp,
+                    onUnhideWindowsApp = viewModel::unhideWindowsApp,
                 )
             }
         }

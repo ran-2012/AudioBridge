@@ -7,6 +7,39 @@ namespace AudioBridge.Tests;
 public sealed class StreamingCoordinatorTests
 {
     [Fact]
+    public void ShouldSendHeartbeat_ShouldReturnFalse_WhenIdleThresholdNotReached()
+    {
+        var now = new DateTime(2026, 4, 12, 10, 0, 4, DateTimeKind.Utc);
+        var lastActivity = new DateTime(2026, 4, 12, 10, 0, 0, DateTimeKind.Utc);
+
+        var shouldSend = StreamingCoordinator.ShouldSendHeartbeat(now, lastActivity, TimeSpan.FromSeconds(5));
+
+        Assert.False(shouldSend);
+    }
+
+    [Fact]
+    public void ShouldSendHeartbeat_ShouldReturnTrue_WhenIdleThresholdReached()
+    {
+        var now = new DateTime(2026, 4, 12, 10, 0, 5, DateTimeKind.Utc);
+        var lastActivity = new DateTime(2026, 4, 12, 10, 0, 0, DateTimeKind.Utc);
+
+        var shouldSend = StreamingCoordinator.ShouldSendHeartbeat(now, lastActivity, TimeSpan.FromSeconds(5));
+
+        Assert.True(shouldSend);
+    }
+
+    [Fact]
+    public void ShouldSendHeartbeat_ShouldReturnFalse_WhenNoPreviousActivityExists()
+    {
+        var shouldSend = StreamingCoordinator.ShouldSendHeartbeat(
+            new DateTime(2026, 4, 12, 10, 0, 5, DateTimeKind.Utc),
+            default,
+            TimeSpan.FromSeconds(5));
+
+        Assert.False(shouldSend);
+    }
+
+    [Fact]
     public void SelectTargetDevice_ShouldReturnPreferredOnlineDevice_WhenNotRequiringRunningApp()
     {
         var devices = new[]

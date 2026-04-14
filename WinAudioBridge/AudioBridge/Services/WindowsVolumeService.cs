@@ -82,7 +82,7 @@ public sealed class WindowsVolumeService : IDisposable
         {
             try
             {
-                await monitorTask;
+                await monitorTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -152,13 +152,18 @@ public sealed class WindowsVolumeService : IDisposable
 
     public void Dispose()
     {
-        StopMonitoringAsync().GetAwaiter().GetResult();
+        StopMonitoringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopMonitoringAsync().ConfigureAwait(false);
     }
 
     private async Task MonitorLoopAsync(TimeSpan interval, CancellationToken cancellationToken)
     {
         using var timer = new PeriodicTimer(interval);
-        while (await timer.WaitForNextTickAsync(cancellationToken))
+        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
         {
             try
             {

@@ -76,6 +76,8 @@ fun AudioBridgeScreen(
     onWindowsMasterMuteChanged: (Boolean) -> Unit,
     onWindowsSessionVolumeChanged: (String, Float) -> Unit,
     onWindowsSessionMuteChanged: (String, Boolean) -> Unit,
+    onHideWindowsApp: (WindowsAppVolumeSession) -> Unit,
+    onUnhideWindowsApp: (String) -> Unit,
 ) {
     var currentPage by rememberSaveable { mutableStateOf(AudioBridgePage.Main.name) }
     val page = remember(currentPage) {
@@ -143,6 +145,8 @@ fun AudioBridgeScreen(
                 contentPadding = innerPadding,
                 onStartService = onStartService,
                 onStopService = onStopService,
+                onHideWindowsApp = onHideWindowsApp,
+                onUnhideWindowsApp = onUnhideWindowsApp,
             )
         }
     }

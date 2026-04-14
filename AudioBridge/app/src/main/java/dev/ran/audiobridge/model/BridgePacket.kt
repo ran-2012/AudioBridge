@@ -15,6 +15,8 @@ sealed interface BridgePacket {
         val audioData: ByteArray,
     ) : BridgePacket
 
+    object Heartbeat : BridgePacket
+
     data class VolumeCatalogSnapshot(
         val catalog: WindowsVolumeCatalog,
     ) : BridgePacket

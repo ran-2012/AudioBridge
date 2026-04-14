@@ -6,9 +6,10 @@ using WpfApp1.Models;
 
 namespace WpfApp1.Services;
 
-public sealed class StreamingCoordinator : IDisposable
+public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan HeartbeatIdleThreshold = TimeSpan.FromSeconds(5);
     private readonly SettingsService _settingsService;
     private readonly AdbService _adbService;
     private readonly AudioCaptureService _audioCaptureService;
@@ -25,9 +26,13 @@ public sealed class StreamingCoordinator : IDisposable
     private StreamingSessionOptions? _activeSessionOptions;
     private CancellationTokenSource? _reconnectCancellationTokenSource;
     private Task? _reconnectTask;
+    private CancellationTokenSource? _heartbeatCancellationTokenSource;
+    private Task? _heartbeatTask;
     private uint _sequence;
     private bool _frameSendFaulted;
     private bool _isStopping;
+    private long _lastTransportActivityUtcTicks;
+    private int _heartbeatCount;
 
     public StreamingCoordinator(
         SettingsService settingsService,
@@ -129,7 +134,11 @@ public sealed class StreamingCoordinator : IDisposable
             _sequence = 0;
             _isStopping = false;
             _frameSendFaulted = false;
+            MarkTransportActivity();
+            _heartbeatCount = 0;
             CancelReconnectLoop();
+            await CancelHeartbeatLoopAsync();
+            StartHeartbeatLoop();
             _audioCaptureService.Start();
             UpdateStatus(StreamingState.Streaming, "推流链路已建立，正在发送音频帧。", Status.TargetDeviceSerial, Status.TargetDeviceName);
         }
@@ -140,6 +149,7 @@ public sealed class StreamingCoordinator : IDisposable
         }
         catch (Exception ex)
         {
+            await CancelHeartbeatLoopAsync();
             await _audioTransportService.DisconnectAsync();
             _audioCaptureService.Stop();
             _logService.Error("Coordinator", $"启动推流失败：{ex.Message}");
@@ -158,6 +168,7 @@ public sealed class StreamingCoordinator : IDisposable
         {
             _isStopping = true;
             CancelReconnectLoop();
+            await CancelHeartbeatLoopAsync();
             _frameSendFaulted = true;
             await Task.Run(() => _audioCaptureService.Stop());
             await _audioTransportService.DisconnectAsync();
@@ -181,8 +192,20 @@ public sealed class StreamingCoordinator : IDisposable
         _audioTransportService.MessageReceived -= OnTransportMessageReceived;
         _windowsVolumeService.SnapshotChanged -= OnWindowsVolumeSnapshotChanged;
         CancelReconnectLoop();
+        CancelHeartbeatLoopAsync().ConfigureAwait(false).GetAwaiter().GetResult();
         _audioCaptureService.Dispose();
-        _audioTransportService.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _audioTransportService.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _audioCaptureService.AudioFrameCaptured -= OnAudioFrameCaptured;
+        _audioTransportService.MessageReceived -= OnTransportMessageReceived;
+        _windowsVolumeService.SnapshotChanged -= OnWindowsVolumeSnapshotChanged;
+        CancelReconnectLoop();
+        await CancelHeartbeatLoopAsync().ConfigureAwait(false);
+        _audioCaptureService.Dispose();
+        await _audioTransportService.DisposeAsync().ConfigureAwait(false);
     }
 
     public async Task AutoConnectIfPossibleAsync(string reason, bool restartIfRunning)
@@ -323,21 +346,126 @@ public sealed class StreamingCoordinator : IDisposable
         try
         {
             await _audioTransportService.SendAudioFrameAsync(buffer, bytesRecorded, sequence);
+            MarkTransportActivity();
         }
         catch (Exception ex)
         {
-            if (_frameSendFaulted)
-            {
-                return;
-            }
-
-            _frameSendFaulted = true;
-            _logService.Error("Coordinator", $"发送音频帧失败：{ex.Message}");
-            _audioCaptureService.Stop();
-            await _audioTransportService.DisconnectAsync();
-            UpdateStatus(StreamingState.Faulted, $"发送音频帧失败：{ex.Message}", Status.TargetDeviceSerial, Status.TargetDeviceName);
-            ScheduleReconnect("音频链路断开，准备自动重连。");
+            await HandleTransportSendFailureAsync("发送音频帧失败", ex);
         }
+    }
+
+    internal static bool ShouldSendHeartbeat(DateTime nowUtc, DateTime lastTransportActivityUtc, TimeSpan idleThreshold)
+    {
+        if (lastTransportActivityUtc == default)
+        {
+            return false;
+        }
+
+        return nowUtc - lastTransportActivityUtc >= idleThreshold;
+    }
+
+    private void StartHeartbeatLoop()
+    {
+        _heartbeatCancellationTokenSource = new CancellationTokenSource();
+        _heartbeatTask = Task.Run(() => HeartbeatLoopAsync(_heartbeatCancellationTokenSource.Token));
+    }
+
+    private async Task CancelHeartbeatLoopAsync()
+    {
+        var cancellationTokenSource = _heartbeatCancellationTokenSource;
+        var heartbeatTask = _heartbeatTask;
+
+        _heartbeatCancellationTokenSource = null;
+        _heartbeatTask = null;
+
+        if (cancellationTokenSource is null)
+        {
+            return;
+        }
+
+        cancellationTokenSource.Cancel();
+        cancellationTokenSource.Dispose();
+
+        if (heartbeatTask is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await heartbeatTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
+    }
+
+    private async Task HeartbeatLoopAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(HeartbeatIdleThreshold);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                if (!_audioTransportService.IsConnected || _isStopping)
+                {
+                    continue;
+                }
+
+                var lastActivityUtc = new DateTime(Interlocked.Read(ref _lastTransportActivityUtcTicks), DateTimeKind.Utc);
+                if (!ShouldSendHeartbeat(DateTime.UtcNow, lastActivityUtc, HeartbeatIdleThreshold))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await _audioTransportService.SendHeartbeatAsync(cancellationToken);
+                    MarkTransportActivity();
+                    _heartbeatCount++;
+                    if (_heartbeatCount == 1 || _heartbeatCount % 12 == 0)
+                    {
+                        _logService.Info("Coordinator", $"音频空闲中，已发送保活心跳：count={_heartbeatCount}。 ");
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    await HandleTransportSendFailureAsync("发送保活心跳失败", ex);
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
+    }
+
+    private void MarkTransportActivity()
+    {
+        Interlocked.Exchange(ref _lastTransportActivityUtcTicks, DateTime.UtcNow.Ticks);
+    }
+
+    private async Task HandleTransportSendFailureAsync(string operation, Exception ex)
+    {
+        if (_frameSendFaulted || _isStopping)
+        {
+            return;
+        }
+
+        _frameSendFaulted = true;
+        _logService.Error("Coordinator", $"{operation}：{ex.Message}");
+        _audioCaptureService.Stop();
+        await CancelHeartbeatLoopAsync();
+        await _audioTransportService.DisconnectAsync();
+        UpdateStatus(StreamingState.Faulted, $"{operation}：{ex.Message}", Status.TargetDeviceSerial, Status.TargetDeviceName);
+        ScheduleReconnect("音频链路断开，准备自动重连。");
     }
 
     private void ScheduleReconnect(string reason)
@@ -481,7 +609,7 @@ public sealed class StreamingCoordinator : IDisposable
             CancellationToken.None);
     }
 
-    private Task SendVolumeCatalogSnapshotAsync(uint requestId, bool includeIconsInline, CancellationToken cancellationToken)
+    private async Task SendVolumeCatalogSnapshotAsync(uint requestId, bool includeIconsInline, CancellationToken cancellationToken)
     {
         var snapshot = _windowsVolumeService.Current;
         var payload = new
@@ -490,13 +618,14 @@ public sealed class StreamingCoordinator : IDisposable
             catalog = BuildCatalogDto(snapshot, requestId, includeIconsInline)
         };
 
-        return _audioTransportService.SendJsonControlMessageAsync(
+        await _audioTransportService.SendJsonControlMessageAsync(
             BridgeMessageType.VolumeCatalogSnapshot,
             JsonSerializer.Serialize(payload, _jsonOptions),
             cancellationToken);
+        MarkTransportActivity();
     }
 
-    private Task SendCommandAckAsync(
+    private async Task SendCommandAckAsync(
         uint requestId,
         bool success,
         int errorCode,
@@ -517,10 +646,11 @@ public sealed class StreamingCoordinator : IDisposable
             catalog
         };
 
-        return _audioTransportService.SendJsonControlMessageAsync(
+        await _audioTransportService.SendJsonControlMessageAsync(
             BridgeMessageType.CommandAck,
             JsonSerializer.Serialize(payload, _jsonOptions),
             cancellationToken);
+        MarkTransportActivity();
     }
 
     private object BuildCatalogDto(WindowsVolumeSnapshot snapshot, uint requestId, bool includeIconsInline)

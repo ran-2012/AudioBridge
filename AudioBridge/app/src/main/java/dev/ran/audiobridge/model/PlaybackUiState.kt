@@ -12,6 +12,8 @@ data class PlaybackUiState(
     val lastSequence: UInt = 0u,
     val sessionInfo: PlaybackSessionInfo = PlaybackSessionInfo(),
     val windowsVolumeCatalog: WindowsVolumeCatalog = WindowsVolumeCatalog(),
+    val hiddenProcessNames: Set<String> = emptySet(),
+    val hiddenWindowsApps: List<HiddenWindowsApp> = emptyList(),
     val windowsVolumeLoading: Boolean = false,
     val windowsVolumeStatusMessage: String = "等待 Windows 音量目录",
     val windowsVolumeErrorMessage: String? = null,

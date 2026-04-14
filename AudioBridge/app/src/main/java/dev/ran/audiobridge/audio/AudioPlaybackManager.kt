@@ -113,16 +113,17 @@ class AudioPlaybackManager {
             )
         }
 
-        var result = if (runtime.hasPlaybackProgressed) {
-            writeNonBlocking(track, packet.audioData)
-        } else {
-            track.write(packet.audioData, 0, packet.audioData.size)
-        }
+        var result = writeToTrack(track, runtime, packet.audioData)
 
         if (runtime.hasPlaybackProgressed && result in 0 until packet.audioData.size) {
             discardBufferedAudio(track, runtime)
             trimmedBufferedAudio = true
-            result = writeNonBlocking(track, packet.audioData)
+            result = writeToTrack(track, runtime, packet.audioData)
+        }
+
+        if (result < 0) {
+            recoverTrackAfterIdle(track, runtime)
+            result = writeToTrack(track, runtime, packet.audioData)
         }
 
         require(result >= 0) {
@@ -154,6 +155,36 @@ class AudioPlaybackManager {
 
     private fun writeNonBlocking(track: AudioTrack, audioData: ByteArray): Int =
         track.write(audioData, 0, audioData.size, AudioTrack.WRITE_NON_BLOCKING)
+
+    private fun writeToTrack(track: AudioTrack, runtime: PlaybackRuntime, audioData: ByteArray): Int {
+        ensurePlaybackStarted(track)
+        return if (runtime.hasPlaybackProgressed) {
+            writeNonBlocking(track, audioData)
+        } else {
+            track.write(audioData, 0, audioData.size)
+        }
+    }
+
+    private fun ensurePlaybackStarted(track: AudioTrack) {
+        if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+            return
+        }
+
+        runCatching {
+            if (track.playState == AudioTrack.PLAYSTATE_STOPPED) {
+                track.flush()
+            }
+            track.play()
+        }
+    }
+
+    private fun recoverTrackAfterIdle(track: AudioTrack, runtime: PlaybackRuntime) {
+        runCatching { track.pause() }
+        runCatching { track.flush() }
+        runtime.lastPlaybackHeadPosition = track.playbackHeadPosition.toLong()
+        runtime.hasPlaybackProgressed = false
+        ensurePlaybackStarted(track)
+    }
 
     private fun discardBufferedAudio(track: AudioTrack, runtime: PlaybackRuntime) {
         runCatching { track.pause() }

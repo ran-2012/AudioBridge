@@ -81,6 +81,12 @@ public sealed class AudioTransportService : IAsyncDisposable
         }
     }
 
+    public async Task SendHeartbeatAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureConnected();
+        await WritePacketAsync(BridgeMessageType.Heartbeat, Array.Empty<byte>(), cancellationToken);
+    }
+
     public Task SendJsonControlMessageAsync(BridgeMessageType messageType, string json, CancellationToken cancellationToken = default)
     {
         EnsureConnected();
@@ -99,7 +105,7 @@ public sealed class AudioTransportService : IAsyncDisposable
         {
             _receiveLoopCancellationTokenSource?.Cancel();
 
-            await _stream.DisposeAsync();
+            await _stream.DisposeAsync().ConfigureAwait(false);
             _stream = null;
         }
 
@@ -107,7 +113,7 @@ public sealed class AudioTransportService : IAsyncDisposable
         {
             try
             {
-                await _receiveLoopTask;
+                await _receiveLoopTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -165,7 +171,7 @@ public sealed class AudioTransportService : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                var header = await ReadExactlyAsync(12, cancellationToken);
+                var header = await ReadExactlyAsync(12, cancellationToken).ConfigureAwait(false);
                 var magic = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(0, 4));
                 if (magic != Magic)
                 {
@@ -185,7 +191,7 @@ public sealed class AudioTransportService : IAsyncDisposable
                     throw new InvalidDataException($"收到非法负载长度：{payloadLength}");
                 }
 
-                var payload = await ReadExactlyAsync((int)payloadLength, cancellationToken);
+                var payload = await ReadExactlyAsync((int)payloadLength, cancellationToken).ConfigureAwait(false);
                 MessageReceived?.Invoke(this, new TransportMessageReceivedEventArgs(messageType, payload));
             }
         }
@@ -220,7 +226,7 @@ public sealed class AudioTransportService : IAsyncDisposable
 
         while (offset < length)
         {
-            var count = await _stream!.ReadAsync(buffer.AsMemory(offset, length - offset), cancellationToken);
+            var count = await _stream!.ReadAsync(buffer.AsMemory(offset, length - offset), cancellationToken).ConfigureAwait(false);
             if (count == 0)
             {
                 throw new IOException("远端已关闭连接。 ");

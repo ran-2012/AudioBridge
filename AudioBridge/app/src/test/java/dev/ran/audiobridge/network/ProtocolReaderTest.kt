@@ -54,6 +54,13 @@ class ProtocolReaderTest {
     }
 
     @Test
+    fun readPacket_shouldParseHeartbeat() {
+        val packet = reader.readPacket(ByteArrayInputStream(createPacket(BridgeMessageType.HEARTBEAT, ByteArray(0))))
+
+        assertTrue(packet === BridgePacket.Heartbeat)
+    }
+
+    @Test
     fun readPacket_shouldParseVolumeCatalogSnapshot() {
         val payload = """
             {

@@ -46,6 +46,7 @@ class ProtocolReader {
                 payloadBuffer.get(audioData)
                 BridgePacket.AudioFrame(sequence, timestamp, audioData)
             }
+            BridgeMessageType.HEARTBEAT -> BridgePacket.Heartbeat
             BridgeMessageType.VOLUME_CATALOG_SNAPSHOT -> {
                 BridgePacket.VolumeCatalogSnapshot(WindowsVolumeJsonCodec.parseCatalogSnapshot(payloadText))
             }

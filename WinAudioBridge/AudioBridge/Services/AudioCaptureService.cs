@@ -84,7 +84,7 @@ public sealed class AudioCaptureService : IDisposable
     {
         if (e.BytesRecorded <= 0)
         {
-            _logService.Warning("Capture", "收到零长度音频帧，已忽略。通常表示当前没有可用的系统回环音频数据。");
+            // _logService.Warning("Capture", "收到零长度音频帧，已忽略。通常表示当前没有可用的系统回环音频数据。");
             return;
         }
 
