@@ -29,6 +29,8 @@ class MainActivity : ComponentActivity() {
                     onRestartService = viewModel::restartService,
                     onVolumeChanged = viewModel::updateVolume,
                     onPlaybackCacheChanged = viewModel::updatePlaybackCacheMilliseconds,
+                    onApplyScreenOffPlaybackCachePreset = viewModel::applyScreenOffPlaybackCachePreset,
+                    onOpenBatteryOptimizationSettings = viewModel::openBatteryOptimizationSettings,
                     onRequestWindowsVolumeSnapshot = viewModel::requestWindowsVolumeSnapshot,
                     onWindowsMasterVolumeChanged = viewModel::updateWindowsMasterVolume,
                     onWindowsMasterMuteChanged = viewModel::updateWindowsMasterMute,
@@ -39,5 +41,10 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshBatteryOptimizationState()
     }
 }

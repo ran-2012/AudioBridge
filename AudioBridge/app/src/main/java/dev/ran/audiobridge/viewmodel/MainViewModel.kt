@@ -1,6 +1,11 @@
 package dev.ran.audiobridge.viewmodel
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ran.audiobridge.audio.PlaybackCacheConfig
@@ -25,6 +30,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     init {
+        refreshBatteryOptimizationState()
+
         viewModelScope.launch {
             volumePreferencesRepository.volumeFlow.collect { volume ->
                 PlaybackStateRepository.updateVolume(volume)
@@ -82,6 +89,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         PlaybackStateRepository.appendLog("UI: 应用启动，自动拉起后台播放服务")
         context.startForegroundService(AudioBridgeService.createStartIntent(context))
+    }
+
+    fun refreshBatteryOptimizationState() {
+        val context = getApplication<Application>()
+        val isIgnoring = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = context.getSystemService(PowerManager::class.java)
+            powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true
+        } else {
+            true
+        }
+        val statusMessage = if (isIgnoring) {
+            "系统已允许 AudioBridge 在锁屏后保持不受限后台运行。"
+        } else {
+            "系统仍可能在熄屏后限制网络与 CPU 调度，建议关闭电池优化并允许后台活动。"
+        }
+        PlaybackStateRepository.updateBatteryOptimizationState(isIgnoring, statusMessage)
+    }
+
+    fun openBatteryOptimizationSettings() {
+        val context = getApplication<Application>()
+        val packageUri = Uri.parse("package:${context.packageName}")
+        val requestIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = packageUri
+            }
+        } else {
+            null
+        }
+        val fallbackIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        val appDetailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = packageUri
+        }
+
+        val launched = sequenceOf(requestIntent, fallbackIntent, appDetailsIntent)
+            .filterNotNull()
+            .any { intent ->
+                runCatching {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                    true
+                }.getOrDefault(false)
+            }
+
+        if (launched) {
+            PlaybackStateRepository.appendLog("UI: 已打开电池优化相关设置页面")
+        } else {
+            PlaybackStateRepository.appendLog("UI: 打开电池优化设置失败，请手动在系统设置中允许后台运行")
+        }
+    }
+
+    fun applyScreenOffPlaybackCachePreset() {
+        updatePlaybackCacheMilliseconds(PlaybackCacheConfig.SCREEN_OFF_RECOMMENDED_MILLISECONDS)
     }
 
     fun stopService() {

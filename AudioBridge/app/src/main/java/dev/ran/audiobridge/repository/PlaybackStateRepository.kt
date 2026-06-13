@@ -48,6 +48,13 @@ object PlaybackStateRepository {
         mutableState.value = mutableState.value.copy(volume = volume)
     }
 
+    fun updateBatteryOptimizationState(isIgnoring: Boolean, statusMessage: String) {
+        mutableState.value = mutableState.value.copy(
+            isIgnoringBatteryOptimizations = isIgnoring,
+            batteryOptimizationStatusMessage = statusMessage,
+        )
+    }
+
     fun updatePlaybackCacheMilliseconds(milliseconds: Int) {
         mutableState.value = mutableState.value.copy(playbackCacheMilliseconds = milliseconds)
     }

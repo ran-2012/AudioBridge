@@ -1,5 +1,6 @@
 package dev.ran.audiobridge.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -20,17 +22,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
-import dev.ran.audiobridge.audio.PlaybackCacheConfig
-import dev.ran.audiobridge.model.PlaybackUiState
-import dev.ran.audiobridge.model.WindowsAppVolumeSession
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
+import dev.ran.audiobridge.audio.PlaybackCacheConfig
 import dev.ran.audiobridge.model.HiddenWindowsAppSupport
+import dev.ran.audiobridge.model.PlaybackUiState
+import dev.ran.audiobridge.model.WindowsAppVolumeSession
 
 @Composable
 internal fun MainPageScreen(
@@ -270,6 +273,85 @@ private fun TabletLandscapeMainPage(
             onWindowsSessionVolumeChanged = onWindowsSessionVolumeChanged,
             onWindowsSessionMuteChanged = onWindowsSessionMuteChanged,
         )
+    }
+}
+
+@Composable
+internal fun ScreenOffStabilityCard(
+    uiState: PlaybackUiState,
+    onApplyScreenOffPlaybackCachePreset: () -> Unit,
+    onOpenBatteryOptimizationSettings: () -> Unit,
+) {
+    val isIgnoringBatteryOptimizations = uiState.isIgnoringBatteryOptimizations
+    val statusColor = when (isIgnoringBatteryOptimizations) {
+        true -> Color(0xFF1B8A5A)
+        false -> Color(0xFFD06A00)
+        null -> MaterialTheme.colorScheme.outline
+    }
+    val shouldRecommendHigherCache =
+        uiState.playbackCacheMilliseconds < PlaybackCacheConfig.SCREEN_OFF_RECOMMENDED_MILLISECONDS
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .height(12.dp)
+                        .width(12.dp)
+                        .rotate(45f)
+                        .background(statusColor, CircleShape),
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("锁屏稳定性", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        when (isIgnoringBatteryOptimizations) {
+                            true -> "后台已放开，当前更可能受瞬时调度抖动影响。"
+                            false -> "系统仍可能在熄屏后限流，优先关闭电池优化。"
+                            null -> "正在检查系统是否允许后台不受限运行。"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+
+            Text(uiState.batteryOptimizationStatusMessage, style = MaterialTheme.typography.bodySmall)
+            Text(
+                "建议锁屏缓存：${PlaybackCacheConfig.SCREEN_OFF_RECOMMENDED_MILLISECONDS}ms，当前：${uiState.playbackCacheMilliseconds}ms",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilledTonalButton(
+                    onClick = onOpenBatteryOptimizationSettings,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (isIgnoringBatteryOptimizations == true) "查看电池设置" else "允许后台不受限")
+                }
+
+                OutlinedButton(
+                    onClick = onApplyScreenOffPlaybackCachePreset,
+                    modifier = Modifier.weight(1f),
+                    enabled = shouldRecommendHigherCache,
+                ) {
+                    Text(if (shouldRecommendHigherCache) "切到 240ms" else "缓存已达建议值")
+                }
+            }
+
+            Text(
+                "如果你用的是小米、华为、OPPO、vivo 等 ROM，还需要在系统设置里额外允许自启动、后台活动和锁屏运行。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 

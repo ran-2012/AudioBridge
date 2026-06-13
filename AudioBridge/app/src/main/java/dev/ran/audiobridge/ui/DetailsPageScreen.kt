@@ -41,6 +41,8 @@ internal fun DetailsPageScreen(
     contentPadding: PaddingValues,
     onStartService: () -> Unit,
     onStopService: () -> Unit,
+    onApplyScreenOffPlaybackCachePreset: () -> Unit,
+    onOpenBatteryOptimizationSettings: () -> Unit,
     onHideWindowsApp: (WindowsAppVolumeSession) -> Unit,
     onUnhideWindowsApp: (String) -> Unit,
 ) {
@@ -57,6 +59,12 @@ internal fun DetailsPageScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        ScreenOffStabilityCard(
+            uiState = uiState,
+            onApplyScreenOffPlaybackCachePreset = onApplyScreenOffPlaybackCachePreset,
+            onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
+        )
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("运行详情", style = MaterialTheme.typography.titleMedium)

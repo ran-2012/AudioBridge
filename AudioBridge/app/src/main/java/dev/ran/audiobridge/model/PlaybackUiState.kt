@@ -7,6 +7,8 @@ data class PlaybackUiState(
     val isConnected: Boolean = false,
     val isPlaying: Boolean = false,
     val statusMessage: String = "服务未启动",
+    val isIgnoringBatteryOptimizations: Boolean? = null,
+    val batteryOptimizationStatusMessage: String = "正在检查锁屏后台限制...",
     val volume: Float = 1.0f,
     val playbackCacheMilliseconds: Int = PlaybackCacheConfig.DEFAULT_MILLISECONDS,
     val lastSequence: UInt = 0u,

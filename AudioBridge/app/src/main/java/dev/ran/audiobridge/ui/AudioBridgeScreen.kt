@@ -71,6 +71,8 @@ fun AudioBridgeScreen(
     onRestartService: () -> Unit,
     onVolumeChanged: (Float) -> Unit,
     onPlaybackCacheChanged: (Int) -> Unit,
+    onApplyScreenOffPlaybackCachePreset: () -> Unit,
+    onOpenBatteryOptimizationSettings: () -> Unit,
     onRequestWindowsVolumeSnapshot: () -> Unit,
     onWindowsMasterVolumeChanged: (Float) -> Unit,
     onWindowsMasterMuteChanged: (Boolean) -> Unit,
@@ -145,6 +147,8 @@ fun AudioBridgeScreen(
                 contentPadding = innerPadding,
                 onStartService = onStartService,
                 onStopService = onStopService,
+                onApplyScreenOffPlaybackCachePreset = onApplyScreenOffPlaybackCachePreset,
+                onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
                 onHideWindowsApp = onHideWindowsApp,
                 onUnhideWindowsApp = onUnhideWindowsApp,
             )

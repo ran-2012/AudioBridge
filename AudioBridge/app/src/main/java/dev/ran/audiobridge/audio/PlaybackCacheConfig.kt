@@ -5,6 +5,7 @@ object PlaybackCacheConfig {
     const val MAX_MILLISECONDS = 400
     const val STEP_MILLISECONDS = 20
     const val DEFAULT_MILLISECONDS = 120
+    const val SCREEN_OFF_RECOMMENDED_MILLISECONDS = 240
 
     fun normalize(milliseconds: Int): Int {
         val clamped = milliseconds.coerceIn(MIN_MILLISECONDS, MAX_MILLISECONDS)
