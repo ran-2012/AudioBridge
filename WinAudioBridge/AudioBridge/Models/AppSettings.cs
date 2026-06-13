@@ -16,5 +16,7 @@ public sealed class AppSettings
 
     public bool EnableAutoReconnect { get; set; } = true;
 
+    public bool EnableDeviceMonitor { get; set; } = true;
+
     public static AppSettings CreateDefault() => new();
 }

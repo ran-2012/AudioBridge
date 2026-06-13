@@ -55,7 +55,8 @@ public sealed class SettingsService
         BufferMilliseconds = Current.BufferMilliseconds,
         AndroidAppPackageName = Current.AndroidAppPackageName,
         PreferredDeviceSerial = Current.PreferredDeviceSerial,
-        EnableAutoReconnect = Current.EnableAutoReconnect
+        EnableAutoReconnect = Current.EnableAutoReconnect,
+        EnableDeviceMonitor = Current.EnableDeviceMonitor
     };
 
     internal static AppSettings Normalize(AppSettings settings)

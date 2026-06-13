@@ -1,5 +1,7 @@
 ﻿using System.Threading;
 using System.Windows;
+using Microsoft.Win32;
+using WpfApp1.Models;
 using WpfApp1.Services;
 
 namespace WpfApp1;
@@ -20,6 +22,7 @@ public partial class App : System.Windows.Application
 	private VolumeIconService? _volumeIconService;
 	private WindowsVolumeService? _windowsVolumeService;
 	private StreamingCoordinator? _streamingCoordinator;
+	private DeviceMonitorService? _deviceMonitorService;
 	private MainWindow? _mainWindow;
 	private SettingsWindow? _settingsWindow;
 	private bool _isExiting;
@@ -71,6 +74,12 @@ public partial class App : System.Windows.Application
 			exitApplication: ExitApplication);
 
 		_trayService.Initialize();
+
+		_deviceMonitorService = new DeviceMonitorService(
+			_settingsService, _adbService, _streamingCoordinator, _logService);
+		_deviceMonitorService.Start();
+
+		SystemEvents.PowerModeChanged += OnSystemPowerModeChanged;
 
 		_ = Dispatcher.BeginInvoke(async () =>
 		{
@@ -190,6 +199,39 @@ public partial class App : System.Windows.Application
 		}
 	}
 
+	private async void OnSystemPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+	{
+		if (e.Mode != PowerModes.Resume)
+		{
+			return;
+		}
+
+		_logService?.Info("App", "检测到系统从睡眠恢复，准备检查设备连接。 ");
+
+		// 延迟 2 秒，等待系统网络和 ADB 恢复
+		await Task.Delay(TimeSpan.FromSeconds(2));
+
+		if (_isExiting || _streamingCoordinator is null)
+		{
+			return;
+		}
+
+		// 仅在非推流状态时触发
+		if (ShouldSkipResumeReconnect(_streamingCoordinator.Status.State))
+		{
+			return;
+		}
+
+		await _streamingCoordinator.AutoConnectIfPossibleAsync(
+			"系统从睡眠恢复后自动连接",
+			restartIfRunning: false);
+	}
+
+	internal static bool ShouldSkipResumeReconnect(StreamingState state)
+	{
+		return state is StreamingState.Streaming or StreamingState.Preparing;
+	}
+
 	private async Task CleanupBeforeShutdownAsync()
 	{
 		if (_cleanupCompleted)
@@ -197,12 +239,17 @@ public partial class App : System.Windows.Application
 			return;
 		}
 
+		SystemEvents.PowerModeChanged -= OnSystemPowerModeChanged;
+
 		if (_settingsService is not null)
 		{
 			_settingsService.SettingsChanged -= SettingsService_SettingsChanged;
 		}
 
 		_logService?.Info("App", "应用正在退出，开始释放资源。 ");
+
+		_deviceMonitorService?.Dispose();
+		_deviceMonitorService = null;
 
 		_trayService?.Dispose();
 		_trayService = null;
