@@ -125,7 +125,7 @@ ADB 转发命令：
 
 - `0x01`：会话初始化消息 `SessionInit`
 - `0x02`：音频帧消息 `AudioFrame`
-- `0x03`：心跳消息 `Heartbeat`（预留）
+- `0x03`：心跳消息 `Heartbeat`（Windows → Android 保活探测）
 - `0x04`：状态消息 `Status`（预留）
 - `0x05`：停止消息 `Stop`（预留）
 - `0x10`：音量目录请求 `VolumeCatalogRequest`
@@ -136,6 +136,9 @@ ADB 转发命令：
 - `0x15`：图标请求 `IconContentRequest`
 - `0x16`：图标响应 `IconContentResponse`
 - `0x17`：命令回执 `CommandAck`
+- `0x18`：心跳回执 `HeartbeatAck`（Android → Windows 存活确认）
+- `0x19`：Android 播放状态 `AndroidPlaybackStatus`（Android → Windows 播放端存活与延迟状态）
+- `0x1A`：Android 播放状态回执 `AndroidPlaybackStatusAck`（Windows → Android 状态接收确认）
 
 MVP 阶段至少实现：
 
@@ -210,22 +213,54 @@ Android 端收到后需要：
 - `AudioData` 为当前帧的编码后数据
 - MVP 阶段一般直接存放 PCM 原始字节流
 
-### 4.6 心跳消息 `Heartbeat`（预留）
+### 4.6 心跳消息 `Heartbeat` 与心跳回执 `HeartbeatAck`
 
-当后续增加连接保活与状态监控时，可增加心跳包。
+用于应用层链路存活检测，解决 `adb forward` 转发链路的“假存活”问题：当 Android 接收端断开时，手机侧 socket 关闭，但 Windows ↔ 本地 adb 进程之间的 TCP 段仍存活，Windows 的写入持续“成功”、`TcpClient.Connected` 仍为 true，导致 Windows 无法感知对端已断开。
 
-建议字段：
+机制：
 
-| 字段 | 类型 | 字节数 | 说明 |
-|---|---:|---:|---|
-| Timestamp | Int64 | 8 | 当前发送时间 |
+- Windows 端在推流期间每 `5` 秒发送一次 `Heartbeat`（`0x03`，空负载）。
+- Android 端每收到一次 `Heartbeat`，立即回送一条 `HeartbeatAck`（`0x18`，空负载）。
+- Windows 端维护“最近一次收到对端任意消息的时间”（含 `HeartbeatAck` 与音量控制消息）。若超过存活超时阈值（默认 `15` 秒，约 3× 心跳周期）仍未收到任何对端消息，则判定链路死亡，停止采集、断开传输，并按 `EnableAutoReconnect` 设置触发自动重连。
+
+`Heartbeat` 与 `HeartbeatAck` 负载均为空（`PayloadLength = 0`），仅依赖 12 字节通用包头。
 
 用途：
 
-- 检测长时间无数据但连接未关闭的异常场景
-- 统计往返延迟（若后续支持回包）
+- 检测长时间无数据但连接未关闭、或 adb 转发假存活的异常场景
+- 后续如需统计往返延迟，可在负载中扩展 `Timestamp` 字段（当前不需要）
 
-### 4.7 音量目录请求 `VolumeCatalogRequest`
+### 4.7 Android 播放状态 `AndroidPlaybackStatus` 与状态回执 `AndroidPlaybackStatusAck`
+
+用于判断 Android 播放端是否真实存活，而不是只判断 Windows ↔ adb 本地 TCP 段是否可写。Android 在活动连接存在时每 `3` 秒主动上报一次播放状态，Windows 收到后立即回送状态回执。
+
+`AndroidPlaybackStatus` 方向为 Android → Windows，JSON 负载字段如下：
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `sequence` | UInt32 | 播放状态包递增序号 |
+| `isPlaying` | Boolean | Android 当前 `AudioTrack` 是否处于播放态 |
+| `lastSequence` | UInt32 | 最近处理的音频帧序号，未收到音频时为 `0` |
+| `lastAudioFrameAgeMillis` | Int64? | 距离最近音频帧的时间，单位毫秒；未知时为 `null` |
+| `bufferedLatencyMillis` | Int64? | 估算播放缓冲/延迟，单位毫秒；无法可靠估算时为 `null` |
+| `timestampElapsedRealtimeMillis` | Int64 | Android 单调时钟时间戳，用于日志排障 |
+
+`AndroidPlaybackStatusAck` 方向为 Windows → Android，JSON 负载字段如下：
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `sequence` | UInt32 | 被确认的播放状态包序号 |
+| `accepted` | Boolean | Windows 是否接受该状态包 |
+| `receivedAtMillis` | Int64 | Windows 收到状态包并回执的 Unix 毫秒时间戳 |
+| `echoedTimestampElapsedRealtimeMillis` | Int64? | 原样带回 Android 状态包中的 `timestampElapsedRealtimeMillis` |
+
+Windows 端维护独立的“最近一次 Android 播放状态时间”。该时间只由 `AndroidPlaybackStatus` 刷新，不由 Windows 发送音频帧、发送心跳或发送 ACK 刷新。若当前音频链路仍处于连接/推流相关状态，且超过默认 `10` 秒未收到 Android 播放状态，Windows 判定播放端链路不健康，停止采集、断开传输，并按 `EnableAutoReconnect` 设置重建音频链路。
+
+当 Android 连续上报 `isPlaying=false` 或 `bufferedLatencyMillis` 超过阈值时，Windows 记录异常；连续达到阈值后按链路不健康处理。单次异常不立即重连，避免因短暂调度抖动产生误判。
+
+旧版 Android 不会上报 `AndroidPlaybackStatus`。新版 Windows 与新版 Android 应配套发布，否则新版 Windows 会在超时后按不健康链路重连。
+
+### 4.8 音量目录请求 `VolumeCatalogRequest`
 
 Android 端进入音量控制页后，可发送该消息请求 Windows 当前完整音量目录。
 
@@ -237,7 +272,7 @@ Android 端进入音量控制页后，可发送该消息请求 Windows 当前完
 | IncludeIconsInline | UInt16 | 2 | `0=否`，`1=是` |
 | Reserved | UInt16 | 2 | 保留 |
 
-### 4.8 音量目录快照 `VolumeCatalogSnapshot`
+### 4.9 音量目录快照 `VolumeCatalogSnapshot`
 
 Windows 端返回完整主音量与应用会话列表。
 
@@ -250,7 +285,7 @@ Windows 端返回完整主音量与应用会话列表。
 - 应用会话数组
 - 每个会话的 `SessionId`、名称、进程信息、音量、静音、图标键、图标摘要
 
-### 4.9 主音量设置请求 `VolumeSetMasterRequest`
+### 4.10 主音量设置请求 `VolumeSetMasterRequest`
 
 Android 端用于设置 Windows 主音量和主静音。
 
@@ -263,7 +298,7 @@ Android 端用于设置 Windows 主音量和主静音。
 | HasMute | UInt16 | 2 | 是否包含静音字段 |
 | Mute | UInt16 | 2 | `0=否`，`1=是` |
 
-### 4.10 应用音量设置请求 `VolumeSetSessionRequest`
+### 4.11 应用音量设置请求 `VolumeSetSessionRequest`
 
 Android 端用于设置指定应用会话的音量或静音。
 
@@ -277,7 +312,7 @@ Android 端用于设置指定应用会话的音量或静音。
 
 建议 `SessionId` 使用长度前缀字符串编码，便于跨语言实现。
 
-### 4.11 音量增量更新 `VolumeSessionDelta`
+### 4.12 音量增量更新 `VolumeSessionDelta`
 
 当 Windows 本地主音量或应用会话音量发生变化时，Windows 端主动推送增量更新。
 
@@ -287,7 +322,7 @@ Android 端用于设置指定应用会话的音量或静音。
 - 目标 `SessionId`（如适用）
 - 最新音量状态
 
-### 4.12 图标请求与图标响应
+### 4.13 图标请求与图标响应
 
 若音量目录快照未内联图标，Android 可按需请求：
 
@@ -296,7 +331,7 @@ Android 端用于设置指定应用会话的音量或静音。
 
 首版如采用 JSON 快照，也可将图标响应设计为 Base64 字符串，后续再优化为二进制负载。
 
-### 4.13 命令回执 `CommandAck`
+### 4.14 命令回执 `CommandAck`
 
 所有音量控制命令建议都返回回执。
 

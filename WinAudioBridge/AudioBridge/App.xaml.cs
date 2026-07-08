@@ -70,6 +70,7 @@ public partial class App : System.Windows.Application
 
 		_trayService = new TrayService(
 			showMainWindow: ShowMainWindow,
+			restartAudio: RestartAudioFromTrayAsync,
 			showSettings: ShowSettings,
 			exitApplication: ExitApplication);
 
@@ -172,6 +173,17 @@ public partial class App : System.Windows.Application
 
 		_settingsWindow.Show();
 		_settingsWindow.Activate();
+	}
+
+	private async Task RestartAudioFromTrayAsync()
+	{
+		if (_streamingCoordinator is null || _isExiting)
+		{
+			return;
+		}
+
+		_logService?.Info("App", "用户通过托盘菜单触发重启音频。 ");
+		await _streamingCoordinator.RestartAudioAsync("托盘菜单手动重启音频");
 	}
 
 	private async void ExitApplication()

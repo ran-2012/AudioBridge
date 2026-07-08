@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -10,6 +11,10 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan HeartbeatIdleThreshold = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan LivenessTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan AndroidPlaybackStatusTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan AndroidPlaybackLatencyThreshold = TimeSpan.FromSeconds(2);
+    private const int AndroidPlaybackAbnormalRestartThreshold = 3;
     private readonly SettingsService _settingsService;
     private readonly AdbService _adbService;
     private readonly AudioCaptureService _audioCaptureService;
@@ -28,10 +33,15 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
     private Task? _reconnectTask;
     private CancellationTokenSource? _heartbeatCancellationTokenSource;
     private Task? _heartbeatTask;
+    private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private uint _sequence;
     private bool _frameSendFaulted;
     private bool _isStopping;
     private long _lastTransportActivityUtcTicks;
+    private long _lastInboundActivityUtcTicks;
+    private long _lastAndroidPlaybackStatusUtcTicks;
+    private int _androidPlaybackStatusCount;
+    private int _consecutiveAbnormalPlaybackStatusCount;
     private int _heartbeatCount;
 
     public StreamingCoordinator(
@@ -53,6 +63,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
 
         _audioCaptureService.AudioFrameCaptured += OnAudioFrameCaptured;
         _audioTransportService.MessageReceived += OnTransportMessageReceived;
+        _audioTransportService.ConnectionLost += OnTransportConnectionLost;
         _windowsVolumeService.SnapshotChanged += OnWindowsVolumeSnapshotChanged;
         UpdateStatus(StreamingState.Idle, "推流协调器已初始化，等待准备链路。", null, null);
     }
@@ -113,6 +124,19 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
 
     public async Task StartStreamingAsync(CancellationToken cancellationToken = default, bool requireAudioAppRunning = false)
     {
+        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await StartStreamingCoreAsync(cancellationToken, requireAudioAppRunning).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
+    }
+
+    private async Task StartStreamingCoreAsync(CancellationToken cancellationToken, bool requireAudioAppRunning)
+    {
         try
         {
             if (Status.State is StreamingState.Idle or StreamingState.Faulted)
@@ -135,6 +159,10 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
             _isStopping = false;
             _frameSendFaulted = false;
             MarkTransportActivity();
+            MarkInboundActivity();
+            MarkAndroidPlaybackStatusReceived();
+            _androidPlaybackStatusCount = 0;
+            _consecutiveAbnormalPlaybackStatusCount = 0;
             _heartbeatCount = 0;
             CancelReconnectLoop();
             await CancelHeartbeatLoopAsync();
@@ -158,6 +186,19 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
     }
 
     public async Task StopStreamingAsync()
+    {
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await StopStreamingCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
+    }
+
+    private async Task StopStreamingCoreAsync()
     {
         if (_isStopping)
         {
@@ -190,43 +231,87 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
     {
         _audioCaptureService.AudioFrameCaptured -= OnAudioFrameCaptured;
         _audioTransportService.MessageReceived -= OnTransportMessageReceived;
+        _audioTransportService.ConnectionLost -= OnTransportConnectionLost;
         _windowsVolumeService.SnapshotChanged -= OnWindowsVolumeSnapshotChanged;
         CancelReconnectLoop();
         CancelHeartbeatLoopAsync().ConfigureAwait(false).GetAwaiter().GetResult();
         _audioCaptureService.Dispose();
         _audioTransportService.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
+        _lifecycleLock.Dispose();
     }
 
     public async ValueTask DisposeAsync()
     {
         _audioCaptureService.AudioFrameCaptured -= OnAudioFrameCaptured;
         _audioTransportService.MessageReceived -= OnTransportMessageReceived;
+        _audioTransportService.ConnectionLost -= OnTransportConnectionLost;
         _windowsVolumeService.SnapshotChanged -= OnWindowsVolumeSnapshotChanged;
         CancelReconnectLoop();
         await CancelHeartbeatLoopAsync().ConfigureAwait(false);
         _audioCaptureService.Dispose();
         await _audioTransportService.DisposeAsync().ConfigureAwait(false);
+        _lifecycleLock.Dispose();
     }
 
     public async Task AutoConnectIfPossibleAsync(string reason, bool restartIfRunning)
     {
-        if (restartIfRunning && Status.State is StreamingState.Streaming or StreamingState.Preparing or StreamingState.Ready)
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            _logService.Info("Coordinator", $"{reason}：检测到当前链路活动，准备重建连接。 ");
-            await StopStreamingAsync();
-        }
+            if (restartIfRunning && Status.State is StreamingState.Streaming or StreamingState.Preparing or StreamingState.Ready)
+            {
+                _logService.Info("Coordinator", $"{reason}：检测到当前链路活动，准备重建连接。 ");
+                await StopStreamingCoreAsync().ConfigureAwait(false);
+            }
 
-        if (Status.State is StreamingState.Streaming or StreamingState.Preparing)
+            if (Status.State is StreamingState.Streaming or StreamingState.Preparing)
+            {
+                return;
+            }
+
+            _logService.Info("Coordinator", $"{reason}：开始检查是否满足自动连接条件。 ");
+            await StartStreamingCoreAsync(CancellationToken.None, requireAudioAppRunning: true).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
+    }
+
+    public async Task RestartAudioAsync(string reason)
+    {
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            _logService.Info("Coordinator", $"{reason}：准备重启音频链路。 ");
+            if (Status.State is StreamingState.Streaming or StreamingState.Preparing or StreamingState.Ready)
+            {
+                await StopStreamingCoreAsync().ConfigureAwait(false);
+            }
+
+            await StartStreamingCoreAsync(CancellationToken.None, requireAudioAppRunning: true).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
+    }
+
+    private async void OnTransportConnectionLost(object? sender, EventArgs e)
+    {
+        if (_isStopping)
         {
             return;
         }
 
-        _logService.Info("Coordinator", $"{reason}：开始检查是否满足自动连接条件。 ");
-        await StartStreamingAsync(requireAudioAppRunning: true);
+        await HandleTransportSendFailureAsync("接收链路检测到连接断开", new IOException("远端已关闭连接。"));
     }
 
     private async void OnTransportMessageReceived(object? sender, TransportMessageReceivedEventArgs e)
     {
+        // 收到任意对端消息都视为链路存活信号（含 HeartbeatAck 与音量控制消息）。
+        MarkInboundActivity();
+
         try
         {
             switch (e.MessageType)
@@ -239,6 +324,9 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
                     break;
                 case BridgeMessageType.VolumeSetSessionRequest:
                     await HandleSetSessionVolumeRequestAsync(e.GetPayloadAsUtf8());
+                    break;
+                case BridgeMessageType.AndroidPlaybackStatus:
+                    await HandleAndroidPlaybackStatusAsync(e.GetPayloadAsUtf8());
                     break;
             }
         }
@@ -391,6 +479,11 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
             return;
         }
 
+        if (heartbeatTask.Id == Task.CurrentId)
+        {
+            return;
+        }
+
         try
         {
             await heartbeatTask.ConfigureAwait(false);
@@ -414,20 +507,37 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
                     continue;
                 }
 
-                var lastActivityUtc = new DateTime(Interlocked.Read(ref _lastTransportActivityUtcTicks), DateTimeKind.Utc);
-                if (!ShouldSendHeartbeat(DateTime.UtcNow, lastActivityUtc, HeartbeatIdleThreshold))
+                // 接收侧存活判定：即使本地 stream.WriteAsync 在 adb 假存活下持续“成功”，
+                // 只要超过 LivenessTimeout 未收到任何对端消息（含 HeartbeatAck），即判定链路死亡。
+                var lastInboundUtc = new DateTime(Interlocked.Read(ref _lastInboundActivityUtcTicks), DateTimeKind.Utc);
+                if (IsInboundLinkDead(DateTime.UtcNow, lastInboundUtc, LivenessTimeout))
                 {
-                    continue;
+                    await HandleTransportSendFailureAsync(
+                        "接收侧心跳超时，判定链路断开",
+                        new IOException($"超过 {LivenessTimeout.TotalSeconds:0} 秒未收到对端任何消息。"));
+                    return;
+                }
+
+                var lastPlaybackStatusUtc = new DateTime(Interlocked.Read(ref _lastAndroidPlaybackStatusUtcTicks), DateTimeKind.Utc);
+                if (ShouldMonitorAndroidPlaybackStatus(Status.State, _audioTransportService.IsConnected, Status.TargetDeviceSerial) &&
+                    IsAndroidPlaybackStatusExpired(DateTime.UtcNow, lastPlaybackStatusUtc, AndroidPlaybackStatusTimeout))
+                {
+                    await HandleTransportSendFailureAsync(
+                        "Android 播放状态心跳超时，准备重建音频链路",
+                        new IOException($"超过 {AndroidPlaybackStatusTimeout.TotalSeconds:0} 秒未收到 Android 播放状态。"));
+                    return;
                 }
 
                 try
                 {
+                    // 每个 tick 都发送心跳以触发对端回送 HeartbeatAck，从而维持接收侧存活信号
+                    // （即使音频正在持续发送，对端在纯播放时不会主动回包）。
                     await _audioTransportService.SendHeartbeatAsync(cancellationToken);
                     MarkTransportActivity();
                     _heartbeatCount++;
                     if (_heartbeatCount == 1 || _heartbeatCount % 12 == 0)
                     {
-                        _logService.Info("Coordinator", $"音频空闲中，已发送保活心跳：count={_heartbeatCount}。 ");
+                        _logService.Info("Coordinator", $"已发送保活心跳：count={_heartbeatCount}。 ");
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -450,6 +560,62 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
     private void MarkTransportActivity()
     {
         Interlocked.Exchange(ref _lastTransportActivityUtcTicks, DateTime.UtcNow.Ticks);
+    }
+
+    private void MarkInboundActivity()
+    {
+        Interlocked.Exchange(ref _lastInboundActivityUtcTicks, DateTime.UtcNow.Ticks);
+    }
+
+    private void MarkAndroidPlaybackStatusReceived()
+    {
+        Interlocked.Exchange(ref _lastAndroidPlaybackStatusUtcTicks, DateTime.UtcNow.Ticks);
+    }
+
+    internal static bool IsInboundLinkDead(DateTime nowUtc, DateTime lastInboundActivityUtc, TimeSpan timeout)
+    {
+        if (lastInboundActivityUtc == default)
+        {
+            return false;
+        }
+
+        return nowUtc - lastInboundActivityUtc >= timeout;
+    }
+
+    internal static bool IsAndroidPlaybackStatusExpired(DateTime nowUtc, DateTime lastStatusUtc, TimeSpan timeout)
+    {
+        if (lastStatusUtc == default)
+        {
+            return false;
+        }
+
+        return nowUtc - lastStatusUtc >= timeout;
+    }
+
+    internal static bool ShouldMonitorAndroidPlaybackStatus(StreamingState state, bool isTransportConnected, string? targetDeviceSerial)
+    {
+        if (!isTransportConnected)
+        {
+            return false;
+        }
+
+        return state is StreamingState.Streaming or StreamingState.Preparing or StreamingState.Ready ||
+               !string.IsNullOrWhiteSpace(targetDeviceSerial);
+    }
+
+    internal static bool IsAndroidPlaybackStatusAbnormal(bool isPlaying, long? bufferedLatencyMillis, TimeSpan latencyThreshold)
+    {
+        if (!isPlaying)
+        {
+            return true;
+        }
+
+        return bufferedLatencyMillis is not null && bufferedLatencyMillis.Value >= latencyThreshold.TotalMilliseconds;
+    }
+
+    internal static bool ShouldRestartForAbnormalPlayback(int consecutiveAbnormalCount, int restartThreshold)
+    {
+        return restartThreshold > 0 && consecutiveAbnormalCount >= restartThreshold;
     }
 
     private async Task HandleTransportSendFailureAsync(string operation, Exception ex)
@@ -607,6 +773,41 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
             session: session is null ? null : BuildSessionDto(session, includeIconsInline: true),
             catalog: null,
             CancellationToken.None);
+    }
+
+    private async Task HandleAndroidPlaybackStatusAsync(string json)
+    {
+        var status = JsonSerializer.Deserialize<AndroidPlaybackStatusPayload>(json, _jsonOptions) ?? new AndroidPlaybackStatusPayload();
+        MarkAndroidPlaybackStatusReceived();
+        _androidPlaybackStatusCount++;
+
+        await _audioTransportService.SendAndroidPlaybackStatusAckAsync(
+            status.Sequence,
+            status.TimestampElapsedRealtimeMillis,
+            CancellationToken.None);
+        MarkTransportActivity();
+
+        var isAbnormal = IsAndroidPlaybackStatusAbnormal(
+            status.IsPlaying,
+            status.BufferedLatencyMillis,
+            AndroidPlaybackLatencyThreshold);
+        _consecutiveAbnormalPlaybackStatusCount = isAbnormal ? _consecutiveAbnormalPlaybackStatusCount + 1 : 0;
+
+        if (_androidPlaybackStatusCount == 1 || _androidPlaybackStatusCount % 10 == 0 || isAbnormal)
+        {
+            var latencyText = status.BufferedLatencyMillis?.ToString() ?? "unknown";
+            var ageText = status.LastAudioFrameAgeMillis?.ToString() ?? "unknown";
+            _logService.Info(
+                "Coordinator",
+                $"收到 Android 播放状态：sequence={status.Sequence}，playing={status.IsPlaying}，lastAudio={status.LastSequence}，age={ageText}ms，latency={latencyText}ms，abnormalCount={_consecutiveAbnormalPlaybackStatusCount}。 ");
+        }
+
+        if (ShouldRestartForAbnormalPlayback(_consecutiveAbnormalPlaybackStatusCount, AndroidPlaybackAbnormalRestartThreshold))
+        {
+            await HandleTransportSendFailureAsync(
+                "Android 连续上报播放异常，准备重建音频链路",
+                new IOException($"连续 {_consecutiveAbnormalPlaybackStatusCount} 次收到异常播放状态。"));
+        }
     }
 
     private async Task SendVolumeCatalogSnapshotAsync(uint requestId, bool includeIconsInline, CancellationToken cancellationToken)
@@ -844,5 +1045,20 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         public bool HasMute { get; init; }
 
         public bool? Mute { get; init; }
+    }
+
+    private sealed class AndroidPlaybackStatusPayload
+    {
+        public uint Sequence { get; init; }
+
+        public bool IsPlaying { get; init; }
+
+        public uint LastSequence { get; init; }
+
+        public long? LastAudioFrameAgeMillis { get; init; }
+
+        public long? BufferedLatencyMillis { get; init; }
+
+        public long TimestampElapsedRealtimeMillis { get; init; }
     }
 }

@@ -12,6 +12,8 @@ import dev.ran.audiobridge.data.VolumePreferencesRepository
 import dev.ran.audiobridge.model.BridgePacket
 import dev.ran.audiobridge.notification.NotificationController
 import dev.ran.audiobridge.repository.PlaybackStateRepository
+import dev.ran.audiobridge.network.AndroidPlaybackStatusJsonCodec
+import dev.ran.audiobridge.network.BridgeFrameEncoder
 import dev.ran.audiobridge.network.BridgeMessageType
 import dev.ran.audiobridge.network.ProtocolReader
 import dev.ran.audiobridge.network.WindowsVolumeJsonCodec
@@ -20,13 +22,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.SocketException
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicInteger
 
 class AudioBridgeService : Service() {
@@ -47,6 +49,8 @@ class AudioBridgeService : Service() {
         private const val EXTRA_SESSION_ID = "extra_session_id"
         private const val SERVER_PORT = 5000
         private const val HEARTBEAT_LOG_INTERVAL = 12
+        private const val PLAYBACK_STATUS_INTERVAL_MILLIS = 3_000L
+        private const val PLAYBACK_STATUS_LOG_INTERVAL = 10
         private const val IDLE_RESUME_LOG_THRESHOLD_MILLIS = 5_000L
 
         fun createStartIntent(context: Context) = Intent(context, AudioBridgeService::class.java).apply {
@@ -108,8 +112,12 @@ class AudioBridgeService : Service() {
     private var activeClientOutputStream: OutputStream? = null
     private val requestIdGenerator = AtomicInteger(1)
     private val outputLock = Any()
+    private var playbackStatusJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var lastPacketElapsedRealtime: Long = 0L
+    private var lastAudioFrameElapsedRealtime: Long = 0L
+    private var lastAudioSequence: UInt = 0u
+    private var playbackStatusSequence: UInt = 0u
     private var heartbeatCount: Int = 0
 
     override fun onCreate() {
@@ -197,12 +205,18 @@ class AudioBridgeService : Service() {
                             synchronized(outputLock) {
                                 activeClientOutputStream = incoming.getOutputStream()
                             }
+                            playbackStatusSequence = 0u
+                            lastAudioSequence = 0u
+                            lastAudioFrameElapsedRealtime = 0L
+                            playbackStatusJob = startPlaybackStatusLoop()
                             runCatching {
                                 handleClient(incoming)
                             }.onFailure { throwable ->
                                 PlaybackStateRepository.appendLog("Network: 连接中断 ${throwable.message ?: "未知错误"}")
                                 PlaybackStateRepository.updateError("连接中断：${throwable.message ?: "未知错误"}")
                             }
+                            playbackStatusJob?.cancel()
+                            playbackStatusJob = null
                             synchronized(outputLock) {
                                 activeClientOutputStream = null
                             }
@@ -245,6 +259,8 @@ class AudioBridgeService : Service() {
                 is BridgePacket.AudioFrame -> {
                     val idleMillis = markPacketReceived()
                     val result = playbackManager.write(packet)
+                    lastAudioSequence = packet.sequence
+                    lastAudioFrameElapsedRealtime = SystemClock.elapsedRealtime()
                     PlaybackStateRepository.updateSequence(packet.sequence)
                     PlaybackStateRepository.updatePlayback(true, "后台播放中")
                     if (idleMillis >= IDLE_RESUME_LOG_THRESHOLD_MILLIS) {
@@ -265,9 +281,10 @@ class AudioBridgeService : Service() {
                 BridgePacket.Heartbeat -> {
                     val idleMillis = markPacketReceived()
                     heartbeatCount += 1
+                    sendHeartbeatAck()
                     if (heartbeatCount == 1 || heartbeatCount % HEARTBEAT_LOG_INTERVAL == 0) {
                         PlaybackStateRepository.appendLog(
-                            "Protocol: 收到保活心跳 heartbeatCount=$heartbeatCount idle=${idleMillis}ms",
+                            "Protocol: 收到保活心跳并回送 ACK heartbeatCount=$heartbeatCount idle=${idleMillis}ms",
                         )
                     }
                 }
@@ -306,6 +323,15 @@ class AudioBridgeService : Service() {
                     PlaybackStateRepository.appendLog(
                         "Protocol: 收到命令回执 requestId=${packet.ack.requestId} success=${packet.ack.success} code=${packet.ack.errorCode}",
                     )
+                }
+
+                is BridgePacket.AndroidPlaybackStatusAckPacket -> {
+                    markPacketReceived()
+                    if (packet.ack.sequence == 1u || packet.ack.sequence % PLAYBACK_STATUS_LOG_INTERVAL.toUInt() == 0u) {
+                        PlaybackStateRepository.appendLog(
+                            "Protocol: 收到播放状态 ACK sequence=${packet.ack.sequence} accepted=${packet.ack.accepted}",
+                        )
+                    }
                 }
             }
         }
@@ -399,23 +425,63 @@ class AudioBridgeService : Service() {
         serviceScope.launch {
             runCatching {
                 val payload = json.toByteArray(Charsets.UTF_8)
-                val header = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
-                    .putInt(0x57414231)
-                    .putShort(1)
-                    .putShort(messageType.toShort())
-                    .putInt(payload.size)
-                    .array()
-
-                synchronized(outputLock) {
-                    activeClientOutputStream?.write(header)
-                    activeClientOutputStream?.write(payload)
-                    activeClientOutputStream?.flush()
-                }
+                writePacketToActiveClient(messageType, payload)
             }.onSuccess {
                 PlaybackStateRepository.appendLog(successLog)
             }.onFailure { throwable ->
                 PlaybackStateRepository.updateWindowsVolumeError("发送控制命令失败：${throwable.message ?: "未知错误"}")
             }
+        }
+    }
+
+    private fun sendHeartbeatAck() {
+        runCatching {
+            writePacketToActiveClient(BridgeMessageType.HEARTBEAT_ACK, ByteArray(0))
+        }.onFailure { throwable ->
+            PlaybackStateRepository.appendLog("Protocol: 回送心跳 ACK 失败：${throwable.message ?: "未知错误"}")
+        }
+    }
+
+    private fun startPlaybackStatusLoop(): Job = serviceScope.launch {
+        while (isActive) {
+            sendPlaybackStatus()
+            delay(PLAYBACK_STATUS_INTERVAL_MILLIS)
+        }
+    }
+
+    private fun sendPlaybackStatus() {
+        playbackStatusSequence += 1u
+        val now = SystemClock.elapsedRealtime()
+        val lastAudioAge = if (lastAudioFrameElapsedRealtime > 0L) now - lastAudioFrameElapsedRealtime else null
+        val status = playbackManager.createPlaybackStatus(
+            sequence = playbackStatusSequence,
+            lastSequence = lastAudioSequence,
+            lastAudioFrameAgeMillis = lastAudioAge,
+            timestampElapsedRealtimeMillis = now,
+        )
+
+        runCatching {
+            val payload = AndroidPlaybackStatusJsonCodec.buildStatus(status).toByteArray(Charsets.UTF_8)
+            writePacketToActiveClient(BridgeMessageType.ANDROID_PLAYBACK_STATUS, payload)
+        }.onSuccess {
+            val isAbnormal = !status.isPlaying || (status.bufferedLatencyMillis ?: 0L) > 0L
+            if (status.sequence == 1u || status.sequence % PLAYBACK_STATUS_LOG_INTERVAL.toUInt() == 0u || isAbnormal) {
+                PlaybackStateRepository.appendLog(
+                    "Protocol: 已发送播放状态 sequence=${status.sequence} playing=${status.isPlaying} lastAudio=${status.lastSequence} age=${status.lastAudioFrameAgeMillis ?: -1}ms latency=${status.bufferedLatencyMillis ?: -1}ms",
+                )
+            }
+        }.onFailure { throwable ->
+            PlaybackStateRepository.appendLog("Protocol: 发送播放状态失败：${throwable.message ?: "未知错误"}")
+        }
+    }
+
+    private fun writePacketToActiveClient(messageType: Int, payload: ByteArray) {
+        val packet = BridgeFrameEncoder.encodePacket(messageType, payload)
+
+        synchronized(outputLock) {
+            val outputStream = activeClientOutputStream ?: error("Windows 未连接")
+            outputStream.write(packet)
+            outputStream.flush()
         }
     }
 
@@ -456,6 +522,8 @@ class AudioBridgeService : Service() {
         serverJob = null
         serverSocket?.close()
         serverSocket = null
+        playbackStatusJob?.cancel()
+        playbackStatusJob = null
         synchronized(outputLock) {
             activeClientOutputStream = null
         }

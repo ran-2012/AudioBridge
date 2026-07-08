@@ -3,6 +3,7 @@ package dev.ran.audiobridge.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import dev.ran.audiobridge.model.AndroidPlaybackStatus
 import dev.ran.audiobridge.model.BridgePacket
 import dev.ran.audiobridge.model.PlaybackSessionInfo
 
@@ -140,6 +141,23 @@ class AudioPlaybackManager {
     fun updateVolume(volume: Float) {
         currentVolume = volume.coerceIn(0f, 1f)
         audioTrack?.setVolume(currentVolume)
+    }
+
+    fun createPlaybackStatus(
+        sequence: UInt,
+        lastSequence: UInt,
+        lastAudioFrameAgeMillis: Long?,
+        timestampElapsedRealtimeMillis: Long,
+    ): AndroidPlaybackStatus {
+        val track = audioTrack
+        return AndroidPlaybackStatus(
+            sequence = sequence,
+            isPlaying = track?.playState == AudioTrack.PLAYSTATE_PLAYING,
+            lastSequence = lastSequence,
+            lastAudioFrameAgeMillis = lastAudioFrameAgeMillis,
+            bufferedLatencyMillis = null,
+            timestampElapsedRealtimeMillis = timestampElapsedRealtimeMillis,
+        )
     }
 
     fun release() {

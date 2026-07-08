@@ -14,4 +14,7 @@ object BridgeMessageType {
     const val ICON_CONTENT_REQUEST = 0x15
     const val ICON_CONTENT_RESPONSE = 0x16
     const val COMMAND_ACK = 0x17
+    const val HEARTBEAT_ACK = 0x18
+    const val ANDROID_PLAYBACK_STATUS = 0x19
+    const val ANDROID_PLAYBACK_STATUS_ACK = 0x1A
 }

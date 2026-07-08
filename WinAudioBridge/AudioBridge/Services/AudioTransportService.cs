@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using WpfApp1.Models;
 
@@ -17,6 +18,7 @@ public sealed class AudioTransportService : IAsyncDisposable
     private CancellationTokenSource? _receiveLoopCancellationTokenSource;
     private Task? _receiveLoopTask;
     private uint _sentFrameCount;
+    private volatile bool _intentionalDisconnect;
 
     public AudioTransportService(AppLogService logService)
     {
@@ -26,6 +28,11 @@ public sealed class AudioTransportService : IAsyncDisposable
     public bool IsConnected => _client?.Connected == true && _stream is not null;
 
     public event EventHandler<TransportMessageReceivedEventArgs>? MessageReceived;
+
+    /// <summary>
+    /// 当接收循环检测到连接被远端关闭或异常中断（非主动断开）时触发。
+    /// </summary>
+    public event EventHandler? ConnectionLost;
 
     public async Task ConnectAsync(string host, int port, CancellationToken cancellationToken = default)
     {
@@ -37,6 +44,7 @@ public sealed class AudioTransportService : IAsyncDisposable
         await _client.ConnectAsync(host, port, cancellationToken);
         _stream = _client.GetStream();
         _sentFrameCount = 0;
+        _intentionalDisconnect = false;
         _receiveLoopCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _receiveLoopTask = Task.Run(() => ReceiveLoopAsync(_receiveLoopCancellationTokenSource.Token), CancellationToken.None);
         _logService.Info("Transport", $"TCP 连接已建立：{host}:{port}。");
@@ -94,12 +102,30 @@ public sealed class AudioTransportService : IAsyncDisposable
         return WritePacketAsync(messageType, payload, cancellationToken);
     }
 
+    public Task SendAndroidPlaybackStatusAckAsync(uint sequence, long echoedTimestampElapsedRealtimeMillis, CancellationToken cancellationToken = default)
+    {
+        var payload = new
+        {
+            sequence,
+            accepted = true,
+            receivedAtMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            echoedTimestampElapsedRealtimeMillis
+        };
+
+        return SendJsonControlMessageAsync(
+            BridgeMessageType.AndroidPlaybackStatusAck,
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
+            cancellationToken);
+    }
+
     public async Task DisconnectAsync()
     {
         if (_client is null && _stream is null)
         {
             return;
         }
+
+        _intentionalDisconnect = true;
 
         if (_stream is not null)
         {
@@ -208,6 +234,7 @@ public sealed class AudioTransportService : IAsyncDisposable
             if (!cancellationToken.IsCancellationRequested)
             {
                 _logService.Warning("Transport", $"接收控制消息时连接已断开：{ex.Message}");
+                RaiseConnectionLostIfUnexpected(cancellationToken);
             }
         }
         catch (Exception ex)
@@ -215,8 +242,20 @@ public sealed class AudioTransportService : IAsyncDisposable
             if (!cancellationToken.IsCancellationRequested)
             {
                 _logService.Error("Transport", $"接收控制消息失败：{ex.Message}");
+                RaiseConnectionLostIfUnexpected(cancellationToken);
             }
         }
+    }
+
+    private void RaiseConnectionLostIfUnexpected(CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested || _intentionalDisconnect)
+        {
+            return;
+        }
+
+        _logService.Warning("Transport", "检测到连接被远端关闭，触发连接丢失通知。");
+        ConnectionLost?.Invoke(this, EventArgs.Empty);
     }
 
     private async Task<byte[]> ReadExactlyAsync(int length, CancellationToken cancellationToken)

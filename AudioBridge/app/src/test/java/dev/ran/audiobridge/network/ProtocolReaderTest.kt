@@ -103,6 +103,26 @@ class ProtocolReaderTest {
     }
 
     @Test
+    fun readPacket_shouldParseAndroidPlaybackStatusAck() {
+        val payload = """
+            {
+              "sequence": 9,
+              "accepted": true,
+              "receivedAtMillis": 456,
+              "echoedTimestampElapsedRealtimeMillis": 123
+            }
+        """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+
+        val packet = reader.readPacket(ByteArrayInputStream(createPacket(BridgeMessageType.ANDROID_PLAYBACK_STATUS_ACK, payload)))
+
+        val ack = packet as BridgePacket.AndroidPlaybackStatusAckPacket
+        assertEquals(9u, ack.ack.sequence)
+        assertTrue(ack.ack.accepted)
+        assertEquals(456L, ack.ack.receivedAtMillis)
+        assertEquals(123L, ack.ack.echoedTimestampElapsedRealtimeMillis)
+    }
+
+    @Test
     fun readPacket_shouldRejectInvalidMagic() {
         val bytes = createPacket(BridgeMessageType.COMMAND_ACK, ByteArray(0)).clone()
         ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).putInt(0x12345678)

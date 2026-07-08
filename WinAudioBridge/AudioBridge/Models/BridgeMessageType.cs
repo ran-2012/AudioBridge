@@ -14,5 +14,8 @@ public enum BridgeMessageType : ushort
     VolumeSessionDelta = 0x14,
     IconContentRequest = 0x15,
     IconContentResponse = 0x16,
-    CommandAck = 0x17
+    CommandAck = 0x17,
+    HeartbeatAck = 0x18,
+    AndroidPlaybackStatus = 0x19,
+    AndroidPlaybackStatusAck = 0x1A
 }

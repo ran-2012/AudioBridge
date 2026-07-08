@@ -31,4 +31,8 @@ sealed interface BridgePacket {
     data class CommandAck(
         val ack: WindowsCommandAck,
     ) : BridgePacket
+
+    data class AndroidPlaybackStatusAckPacket(
+        val ack: AndroidPlaybackStatusAck,
+    ) : BridgePacket
 }

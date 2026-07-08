@@ -62,6 +62,9 @@ class ProtocolReader {
             BridgeMessageType.COMMAND_ACK -> {
                 BridgePacket.CommandAck(WindowsVolumeJsonCodec.parseCommandAck(payloadText))
             }
+            BridgeMessageType.ANDROID_PLAYBACK_STATUS_ACK -> {
+                BridgePacket.AndroidPlaybackStatusAckPacket(AndroidPlaybackStatusJsonCodec.parseAck(payloadText))
+            }
             else -> error("暂不支持的消息类型: $messageType")
         }
     }
