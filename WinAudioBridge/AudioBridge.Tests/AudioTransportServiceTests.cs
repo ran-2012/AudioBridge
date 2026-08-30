@@ -94,6 +94,109 @@ public sealed class AudioTransportServiceTests
         Assert.Equal(1234, json.GetProperty("echoedTimestampElapsedRealtimeMillis").GetInt64());
     }
 
+    [Fact]
+    public async Task StartListening_AcceptClient_ShouldEstablishServerConnection()
+    {
+        int port;
+        using (var probe = new LoopbackListener()) { port = probe.Port; }
+
+        await using var transport = new AudioTransportService(new AppLogService());
+        await transport.StartListeningAsync("127.0.0.1", port);
+        Assert.True(transport.IsListening);
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port);
+        await transport.AcceptClientAsync();
+
+        Assert.True(transport.IsConnected);
+        Assert.True(client.Connected);
+    }
+
+    [Fact]
+    public async Task AcceptClient_ShouldReplacePreviousConnection_WhenNewClientArrives()
+    {
+        int port;
+        using (var probe = new LoopbackListener()) { port = probe.Port; }
+
+        await using var transport = new AudioTransportService(new AppLogService());
+        await transport.StartListeningAsync("127.0.0.1", port);
+
+        using var first = new TcpClient();
+        await first.ConnectAsync(IPAddress.Loopback, port);
+        await transport.AcceptClientAsync();
+        Assert.True(transport.IsConnected);
+
+        using var second = new TcpClient();
+        await second.ConnectAsync(IPAddress.Loopback, port);
+        await transport.AcceptClientAsync();
+
+        Assert.True(transport.IsConnected);
+        Assert.True(await IsRemoteClosedAsync(first.Client));
+        Assert.True(second.Connected);
+    }
+
+    [Fact]
+    public async Task StopListening_ShouldStopAcceptingNewClients()
+    {
+        int port;
+        using (var probe = new LoopbackListener()) { port = probe.Port; }
+
+        await using var transport = new AudioTransportService(new AppLogService());
+        await transport.StartListeningAsync("127.0.0.1", port);
+        Assert.True(transport.IsListening);
+
+        await transport.StopListeningAsync();
+        Assert.False(transport.IsListening);
+    }
+
+    [Fact]
+    public async Task SendLatencyProbeAsync_ShouldSend8ByteTimestampPayload()
+    {
+        int port;
+        using (var probe = new LoopbackListener()) { port = probe.Port; }
+
+        await using var transport = new AudioTransportService(new AppLogService());
+        await transport.StartListeningAsync("127.0.0.1", port);
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port);
+        await transport.AcceptClientAsync();
+
+        await transport.SendLatencyProbeAsync();
+
+        var header = await ReceiveExactlyAsync(client.Client, 12);
+        var messageType = BitConverter.ToUInt16(header, 6);
+        var payloadLength = BitConverter.ToUInt32(header, 8);
+        var payload = await ReceiveExactlyAsync(client.Client, (int)payloadLength);
+
+        Assert.Equal((ushort)BridgeMessageType.LatencyProbe, messageType);
+        Assert.Equal(8u, payloadLength);
+        Assert.Equal(8, payload.Length);
+    }
+
+    [Fact]
+    public async Task SendLatencyProbeAckAsync_ShouldEchoTimestamp()
+    {
+        int port;
+        using (var probe = new LoopbackListener()) { port = probe.Port; }
+
+        await using var transport = new AudioTransportService(new AppLogService());
+        await transport.StartListeningAsync("127.0.0.1", port);
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port);
+        await transport.AcceptClientAsync();
+
+        long timestamp = 1_700_000_000_123L;
+        await transport.SendLatencyProbeAckAsync(timestamp);
+
+        var header = await ReceiveExactlyAsync(client.Client, 12);
+        var messageType = BitConverter.ToUInt16(header, 6);
+        var payloadLength = BitConverter.ToUInt32(header, 8);
+        var payload = await ReceiveExactlyAsync(client.Client, (int)payloadLength);
+
+        Assert.Equal((ushort)BridgeMessageType.LatencyProbeAck, messageType);
+        Assert.Equal(timestamp, BitConverter.ToInt64(payload, 0));
+    }
+
     private static async Task<bool> IsRemoteClosedAsync(Socket socket)
     {
         // 远端关闭后，读取应立即返回 0 字节。轮询短暂等待异步断开完成。

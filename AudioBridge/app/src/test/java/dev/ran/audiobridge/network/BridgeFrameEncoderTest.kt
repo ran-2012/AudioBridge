@@ -31,6 +31,20 @@ class BridgeFrameEncoderTest {
     }
 
     @Test
+    fun encodeLatencyProbeAck_shouldProduce8ByteEchoedTimestamp() {
+        val timestamp = 1_700_000_000_123L
+        val packet = BridgeFrameEncoder.encodeLatencyProbeAck(timestamp)
+
+        assertEquals(BridgeFrameEncoder.HEADER_LENGTH + 8, packet.size)
+        val buffer = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(0x57414231, buffer.int)
+        assertEquals(1, buffer.short.toInt())
+        assertEquals(BridgeMessageType.LATENCY_PROBE_ACK, buffer.short.toInt() and 0xFFFF)
+        assertEquals(8, buffer.int)
+        assertEquals(timestamp, buffer.long)
+    }
+
+    @Test
     fun encodeAndroidPlaybackStatus_shouldProduceHeaderAndPayload() {
         val payload = "{}".toByteArray(Charsets.UTF_8)
         val packet = BridgeFrameEncoder.encodeAndroidPlaybackStatus(payload)

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +16,7 @@ public sealed class AudioTransportService : IAsyncDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private TcpClient? _client;
     private NetworkStream? _stream;
+    private TcpListener? _listener;
     private CancellationTokenSource? _receiveLoopCancellationTokenSource;
     private Task? _receiveLoopTask;
     private uint _sentFrameCount;
@@ -27,12 +29,63 @@ public sealed class AudioTransportService : IAsyncDisposable
 
     public bool IsConnected => _client?.Connected == true && _stream is not null;
 
+    public bool IsListening => _listener is not null;
+
     public event EventHandler<TransportMessageReceivedEventArgs>? MessageReceived;
 
     /// <summary>
     /// 当接收循环检测到连接被远端关闭或异常中断（非主动断开）时触发。
     /// </summary>
     public event EventHandler? ConnectionLost;
+
+    /// <summary>
+    /// 以服务器身份开始监听指定地址与端口，等待 Android 客户端接入。
+    /// </summary>
+    public async Task StartListeningAsync(string host, int port, CancellationToken cancellationToken = default)
+    {
+        await StopListeningAsync();
+
+        _listener = new TcpListener(IPAddress.Parse(host), port);
+        _listener.Start();
+        _logService.Info("Transport", $"服务器已开始监听 {host}:{port}，等待客户端接入。");
+    }
+
+    /// <summary>
+    /// 接受一个客户端连接并启动接收循环（服务器模式）。
+    /// </summary>
+    public async Task AcceptClientAsync(CancellationToken cancellationToken = default)
+    {
+        if (_listener is null)
+        {
+            throw new InvalidOperationException("服务器尚未开始监听。请先调用 StartListeningAsync。");
+        }
+
+        await DisconnectAsync();
+
+        var client = await _listener.AcceptTcpClientAsync(cancellationToken);
+        _client = client;
+        _stream = client.GetStream();
+        _sentFrameCount = 0;
+        _intentionalDisconnect = false;
+        _receiveLoopCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _receiveLoopTask = Task.Run(() => ReceiveLoopAsync(_receiveLoopCancellationTokenSource.Token), CancellationToken.None);
+        _logService.Info("Transport", $"已接受客户端连接：{client.Client.RemoteEndPoint}。");
+    }
+
+    /// <summary>
+    /// 停止监听（不影响已建立的客户端连接）。
+    /// </summary>
+    public Task StopListeningAsync()
+    {
+        if (_listener is not null)
+        {
+            _logService.Info("Transport", "服务器停止监听。");
+            _listener.Stop();
+            _listener = null;
+        }
+
+        return Task.CompletedTask;
+    }
 
     public async Task ConnectAsync(string host, int port, CancellationToken cancellationToken = default)
     {
@@ -93,6 +146,28 @@ public sealed class AudioTransportService : IAsyncDisposable
     {
         EnsureConnected();
         await WritePacketAsync(BridgeMessageType.Heartbeat, Array.Empty<byte>(), cancellationToken);
+    }
+
+    /// <summary>
+    /// 发送延迟探测（payload 为 8 字节毫秒时间戳，UInt64 LE）。
+    /// </summary>
+    public async Task SendLatencyProbeAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureConnected();
+        var payload = new byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(payload, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        await WritePacketAsync(BridgeMessageType.LatencyProbe, payload, cancellationToken);
+    }
+
+    /// <summary>
+    /// 回送延迟探测确认（回显 Android 发送的时间戳）。
+    /// </summary>
+    public async Task SendLatencyProbeAckAsync(long sendTimestampMillis, CancellationToken cancellationToken = default)
+    {
+        EnsureConnected();
+        var payload = new byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(payload, sendTimestampMillis);
+        await WritePacketAsync(BridgeMessageType.LatencyProbeAck, payload, cancellationToken);
     }
 
     public Task SendJsonControlMessageAsync(BridgeMessageType messageType, string json, CancellationToken cancellationToken = default)
@@ -163,6 +238,7 @@ public sealed class AudioTransportService : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await DisconnectAsync();
+        await StopListeningAsync();
     }
 
     private async Task WritePacketAsync(BridgeMessageType messageType, byte[] payload, CancellationToken cancellationToken)

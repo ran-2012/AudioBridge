@@ -14,6 +14,9 @@ public sealed class StreamingSessionOptions
 
     public string PreferredDeviceSerial { get; init; } = string.Empty;
 
+    /// <summary>连接模式："Adb"（USB + adb reverse）或 "Lan"（局域网直连）。</summary>
+    public string ConnectionMode { get; init; } = "Adb";
+
     public int LocalPort { get; init; } = 5000;
 
     public int RemotePort { get; init; } = 5000;

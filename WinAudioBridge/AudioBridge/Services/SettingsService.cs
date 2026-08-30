@@ -56,7 +56,12 @@ public sealed class SettingsService
         AndroidAppPackageName = Current.AndroidAppPackageName,
         PreferredDeviceSerial = Current.PreferredDeviceSerial,
         EnableAutoReconnect = Current.EnableAutoReconnect,
-        EnableDeviceMonitor = Current.EnableDeviceMonitor
+        EnableDeviceMonitor = Current.EnableDeviceMonitor,
+        ConnectionMode = Current.ConnectionMode,
+        LanListenPort = Current.LanListenPort,
+        DiscoveryPort = Current.DiscoveryPort,
+        EnableLanDiscovery = Current.EnableLanDiscovery,
+        EnableLatencyDisplay = Current.EnableLatencyDisplay
     };
 
     internal static AppSettings Normalize(AppSettings settings)
@@ -91,6 +96,21 @@ public sealed class SettingsService
         normalized.PreferredDeviceSerial ??= string.Empty;
 
         normalized.EnableAutoReconnect = normalized.EnableAutoReconnect;
+
+        if (normalized.ConnectionMode is not ("Adb" or "Lan"))
+        {
+            normalized.ConnectionMode = "Adb";
+        }
+
+        if (normalized.LanListenPort is < 1024 or > 65535)
+        {
+            normalized.LanListenPort = 6000;
+        }
+
+        if (normalized.DiscoveryPort is < 1024 or > 65535)
+        {
+            normalized.DiscoveryPort = 9000;
+        }
 
         return normalized;
     }

@@ -27,6 +27,8 @@ class MainActivity : ComponentActivity() {
                     onStartService = viewModel::startService,
                     onStopService = viewModel::stopService,
                     onRestartService = viewModel::restartService,
+                    onConnectUsb = viewModel::connectUsb,
+                    onConnectLanServer = viewModel::connectLanServer,
                     onVolumeChanged = viewModel::updateVolume,
                     onPlaybackCacheChanged = viewModel::updatePlaybackCacheMilliseconds,
                     onApplyScreenOffPlaybackCachePreset = viewModel::applyScreenOffPlaybackCachePreset,

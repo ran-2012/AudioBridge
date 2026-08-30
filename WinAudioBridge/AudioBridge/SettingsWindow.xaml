@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="WinAudioBridge 设置"
         Icon="Assets/app.ico"
-        Height="680"
+        Height="820"
         Width="760"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
@@ -24,6 +24,14 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="16" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="16" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="16" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="16" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="16" />
                 <RowDefinition Height="Auto" />
@@ -63,14 +71,34 @@
                       VerticalAlignment="Center"
                       Content="启动后自动连接、配置修改后自动重连，并在断开后持续尝试重连" />
 
-            <TextBlock Grid.Row="12"
+            <TextBlock Grid.Row="12" VerticalAlignment="Center" Text="连接模式" />
+            <ComboBox x:Name="ConnectionModeComboBox" Grid.Row="12" Grid.Column="2" MinWidth="180" />
+
+            <TextBlock Grid.Row="14" VerticalAlignment="Center" Text="LAN 监听端口" />
+            <TextBox x:Name="LanListenPortTextBox" Grid.Row="14" Grid.Column="2" MinWidth="180" />
+
+            <TextBlock Grid.Row="16" VerticalAlignment="Center" Text="局域网发现" />
+            <CheckBox x:Name="EnableLanDiscoveryCheckBox"
+                      Grid.Row="16"
+                      Grid.Column="2"
+                      VerticalAlignment="Center"
+                      Content="响应 Android 端发现的探测广播（仅局域网模式生效）" />
+
+            <TextBlock Grid.Row="18" VerticalAlignment="Center" Text="延迟显示" />
+            <CheckBox x:Name="EnableLatencyDisplayCheckBox"
+                      Grid.Row="18"
+                      Grid.Column="2"
+                      VerticalAlignment="Center"
+                      Content="测量并显示音频传输延迟（估算值）" />
+
+            <TextBlock Grid.Row="20"
                        Grid.ColumnSpan="3"
                        Foreground="#666"
                        TextWrapping="Wrap"
-                       Text="修改配置后将用于后续音频采集与通信模块。当前版本已支持通过 ADB 查询已连接设备，并识别指定包名的 Android 音频应用是否正在运行。" />
+                       Text="连接模式：ADB 使用 USB + adb reverse，LAN 使用局域网直连（Windows 作服务器，Android 客户端主动连接）。" />
 
             <Border x:Name="DeviceFormatBorder"
-                    Grid.Row="14"
+                    Grid.Row="22"
                     Grid.ColumnSpan="3"
                     Padding="12,8"
                     CornerRadius="6"

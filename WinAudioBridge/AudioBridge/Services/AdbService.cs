@@ -22,6 +22,115 @@ public sealed class AdbService
         return await Task.Run(() => EnsurePortForward(deviceSerial, localPort, remotePort, cancellationToken), cancellationToken);
     }
 
+    /// <summary>
+    /// 建立 adb reverse 转发：设备上的 remotePort 转发到本机的 localPort（供 Android 端主动连接 Windows 服务器）。
+    /// </summary>
+    public async Task<AdbPortForwardResult> EnsureReverseForwardAsync(string deviceSerial, int remotePort, int localPort, CancellationToken cancellationToken = default)
+    {
+        return await Task.Run(() => EnsureReverseForward(deviceSerial, remotePort, localPort, cancellationToken), cancellationToken);
+    }
+
+    /// <summary>
+    /// 移除指定设备上的 adb reverse 转发。
+    /// </summary>
+    public async Task RemoveReverseForwardAsync(string deviceSerial, int remotePort, CancellationToken cancellationToken = default)
+    {
+        await Task.Run(() =>
+        {
+            if (string.IsNullOrWhiteSpace(deviceSerial) || ResolveAdbExecutablePath() is null)
+            {
+                return;
+            }
+
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var device = _adbClient.GetDevices().FirstOrDefault(x => string.Equals(x.Serial, deviceSerial, StringComparison.OrdinalIgnoreCase));
+                if (device is not null)
+                {
+                    _adbClient.RemoveReverseForward(device, $"tcp:{remotePort}");
+                    _logService.Info("ADB", $"已移除 reverse 转发：设备={deviceSerial}，tcp:{remotePort}。");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logService.Warning("ADB", $"移除 reverse 转发失败：{ex.Message}");
+            }
+        }, cancellationToken);
+    }
+
+    private AdbPortForwardResult EnsureReverseForward(string deviceSerial, int remotePort, int localPort, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(deviceSerial))
+        {
+            return new AdbPortForwardResult
+            {
+                IsSuccess = false,
+                StatusMessage = "未提供目标设备序列号。",
+                LocalPort = localPort,
+                RemotePort = remotePort
+            };
+        }
+
+        var adbPath = ResolveAdbExecutablePath();
+        if (adbPath is null)
+        {
+            return new AdbPortForwardResult
+            {
+                IsSuccess = false,
+                StatusMessage = "未找到 adb.exe，无法建立 reverse 转发。",
+                DeviceSerial = deviceSerial,
+                LocalPort = localPort,
+                RemotePort = remotePort
+            };
+        }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            _logService.Info("ADB", $"准备为设备 {deviceSerial} 建立 reverse tcp:{remotePort} -> tcp:{localPort}。");
+            _adbServer.StartServer(adbPath, restartServerIfNewer: false);
+
+            var device = _adbClient.GetDevices().FirstOrDefault(x => string.Equals(x.Serial, deviceSerial, StringComparison.OrdinalIgnoreCase));
+            if (device is null)
+            {
+                return new AdbPortForwardResult
+                {
+                    IsSuccess = false,
+                    StatusMessage = $"未找到序列号为 {deviceSerial} 的 Android 设备。",
+                    DeviceSerial = deviceSerial,
+                    LocalPort = localPort,
+                    RemotePort = remotePort
+                };
+            }
+
+            _adbClient.CreateReverseForward(device, $"tcp:{remotePort}", $"tcp:{localPort}", true);
+            _logService.Info("ADB", $"reverse 转发成功：设备={deviceSerial}，tcp:{remotePort} -> tcp:{localPort}。");
+
+            return new AdbPortForwardResult
+            {
+                IsSuccess = true,
+                StatusMessage = $"已建立 reverse 转发 tcp:{remotePort} -> tcp:{localPort}。",
+                DeviceSerial = deviceSerial,
+                LocalPort = localPort,
+                RemotePort = remotePort
+            };
+        }
+        catch (Exception ex)
+        {
+            _logService.Error("ADB", $"reverse 转发失败：{ex.Message}");
+            return new AdbPortForwardResult
+            {
+                IsSuccess = false,
+                StatusMessage = $"reverse 转发失败：{ex.Message}",
+                DeviceSerial = deviceSerial,
+                LocalPort = localPort,
+                RemotePort = remotePort
+            };
+        }
+    }
+
     public Task<AdbDeviceQueryResult> QueryConnectedDevicesAsync(string androidAppPackageName, CancellationToken cancellationToken = default)
     {
         return Task.Run(() => QueryConnectedDevices(androidAppPackageName, cancellationToken), cancellationToken);

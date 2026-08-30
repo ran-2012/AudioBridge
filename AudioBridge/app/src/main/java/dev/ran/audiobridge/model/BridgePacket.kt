@@ -17,6 +17,14 @@ sealed interface BridgePacket {
 
     object Heartbeat : BridgePacket
 
+    data class LatencyProbe(
+        val sendTimestampMillis: Long,
+    ) : BridgePacket
+
+    data class LatencyProbeAck(
+        val sendTimestampMillis: Long,
+    ) : BridgePacket
+
     data class VolumeCatalogSnapshot(
         val catalog: WindowsVolumeCatalog,
     ) : BridgePacket

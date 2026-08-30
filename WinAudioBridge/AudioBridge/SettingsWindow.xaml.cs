@@ -33,6 +33,7 @@ public partial class SettingsWindow : Window
         SampleRateComboBox.ItemsSource = new[] { 44100, 48000 };
         ChannelsComboBox.ItemsSource = new[] { 1, 2 };
         BufferComboBox.ItemsSource = new[] { 20, 40, 60, 100 };
+        ConnectionModeComboBox.ItemsSource = new[] { "Adb", "Lan" };
     }
 
     private void LoadCurrentValues()
@@ -45,6 +46,10 @@ public partial class SettingsWindow : Window
         AndroidPackageNameTextBox.Text = settings.AndroidAppPackageName;
         _preferredDeviceSerial = settings.PreferredDeviceSerial;
         EnableAutoReconnectCheckBox.IsChecked = settings.EnableAutoReconnect;
+        ConnectionModeComboBox.SelectedItem = settings.ConnectionMode;
+        LanListenPortTextBox.Text = settings.LanListenPort.ToString();
+        EnableLanDiscoveryCheckBox.IsChecked = settings.EnableLanDiscovery;
+        EnableLatencyDisplayCheckBox.IsChecked = settings.EnableLatencyDisplay;
         UpdateSelectedDeviceText();
     }
 
@@ -113,10 +118,14 @@ public partial class SettingsWindow : Window
             BufferMilliseconds = bufferMilliseconds,
             AndroidAppPackageName = AndroidPackageNameTextBox.Text.Trim(),
             PreferredDeviceSerial = _preferredDeviceSerial,
-            EnableAutoReconnect = EnableAutoReconnectCheckBox.IsChecked == true
+            EnableAutoReconnect = EnableAutoReconnectCheckBox.IsChecked == true,
+            ConnectionMode = ConnectionModeComboBox.SelectedItem as string ?? "Adb",
+            LanListenPort = int.TryParse(LanListenPortTextBox.Text.Trim(), out var lanPort) ? lanPort : 6000,
+            EnableLanDiscovery = EnableLanDiscoveryCheckBox.IsChecked == true,
+            EnableLatencyDisplay = EnableLatencyDisplayCheckBox.IsChecked == true
         });
 
-        _logService.Info("Settings", $"设置已保存：编码={encoding}，采样率={sampleRate}，声道={channels}，Buffer={bufferMilliseconds}ms，优先设备={(_preferredDeviceSerial.Length == 0 ? "自动" : _preferredDeviceSerial)}，自动重连={(EnableAutoReconnectCheckBox.IsChecked == true ? "开启" : "关闭")}。");
+        _logService.Info("Settings", $"设置已保存：编码={encoding}，采样率={sampleRate}，声道={channels}，Buffer={bufferMilliseconds}ms，优先设备={(_preferredDeviceSerial.Length == 0 ? "自动" : _preferredDeviceSerial)}，自动重连={(EnableAutoReconnectCheckBox.IsChecked == true ? "开启" : "关闭")}，连接模式={(ConnectionModeComboBox.SelectedItem as string ?? "Adb")}，LAN端口={lanPort}，发现={(EnableLanDiscoveryCheckBox.IsChecked == true ? "开启" : "关闭")}，延迟显示={(EnableLatencyDisplayCheckBox.IsChecked == true ? "开启" : "关闭")}。");
 
         Close();
     }
@@ -136,6 +145,10 @@ public partial class SettingsWindow : Window
         AndroidPackageNameTextBox.Text = defaults.AndroidAppPackageName;
         _preferredDeviceSerial = defaults.PreferredDeviceSerial;
         EnableAutoReconnectCheckBox.IsChecked = defaults.EnableAutoReconnect;
+        ConnectionModeComboBox.SelectedItem = defaults.ConnectionMode;
+        LanListenPortTextBox.Text = defaults.LanListenPort.ToString();
+        EnableLanDiscoveryCheckBox.IsChecked = defaults.EnableLanDiscovery;
+        EnableLatencyDisplayCheckBox.IsChecked = defaults.EnableLatencyDisplay;
         DevicesListView.SelectedItem = null;
         UpdateSelectedDeviceText();
     }

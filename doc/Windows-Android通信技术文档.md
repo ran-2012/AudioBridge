@@ -27,69 +27,82 @@
 
 ### 2.2 通信链路
 
-整体链路如下：
+整体链路（**统一拓扑：Windows 作 TCP 服务器，Android 作 TCP 客户端**）如下：
 
-1. Windows 端检测 Android 设备与 ADB 可用性
-2. Windows 端执行 ADB 端口转发
-3. Android 端启动 `ServerSocket` 监听固定端口
-4. Windows 端作为客户端连接本机转发端口
-5. Windows 端发送会话初始化信息
-6. Windows 端持续发送音频帧
-7. Android 端接收后根据参数初始化 `AudioTrack` 并播放
-8. Android 端可在同一连接上发送音量目录请求与控制命令
-9. Windows 端回传主音量、应用会话信息、图标与控制回执
+1. Windows 端启动 TCP 服务器监听端口（ADB 模式监听 `127.0.0.1:5000`；LAN 模式监听 `0.0.0.0:6000`）
+2. ADB 模式下 Windows 端执行 `adb reverse`，将设备端口转发到本机；LAN 模式下 Android 端通过发现或手动输入获得 Windows 地址
+3. Android 端作为 TCP 客户端主动连接 Windows
+4. 连接成功后 Windows 端发送会话初始化信息
+5. Windows 端持续发送音频帧
+6. Android 端接收后根据参数初始化 `AudioTrack` 并播放
+7. Android 端可在同一连接上发送音量目录请求与控制命令
+8. Windows 端回传主音量、应用会话信息、图标与控制回执
 
 ### 2.3 拓扑说明
 
-逻辑拓扑：
+逻辑拓扑（统一架构）：
 
-- Windows 应用：TCP Client
-- ADB：端口转发通道
-- Android 应用：TCP Server
+- Windows 应用：TCP Server（监听端口）
+- ADB：reverse 转发通道（仅 ADB 模式）
+- Android 应用：TCP Client（主动连接）
 
 推荐端口：
 
-- 默认端口：`5000`
+- ADB 模式：Windows 监听 `5000`，`adb reverse tcp:5000 tcp:5000`
+- LAN 模式：Windows 监听 `6000`，Android 经 Wi-Fi 连接 `WindowsIP:6000`
+- 发现端口（UDP）：`9000`
 
-ADB 转发命令：
+ADB reverse 命令（ADB 模式）：
 
-- `adb forward tcp:5000 tcp:5000`
+- `adb reverse tcp:5000 tcp:5000`
 
 含义：
 
-- Windows 连接 `127.0.0.1:5000`
-- 数据通过 ADB 转发到 Android 设备的 `5000` 端口
+- 设备上的 `127.0.0.1:5000` 被转发到 Windows 本机的 `5000` 端口
+- Android 应用连接设备本地 `127.0.0.1:5000`，数据经 USB 转发到 Windows 服务器
+
+注意：`adb reverse` 在设备拔插、休眠后可能失效，Windows 端需在设备上线或电源恢复时重建（见第 9 章）。
 
 ## 3. 连接流程
 
 ### 3.1 Windows 端流程
 
+ADB 模式：
+
 1. 检查 `adb.exe` 是否存在
-2. 执行 `adb devices`
-3. 校验是否存在已授权设备
-4. 执行端口转发命令
-5. 建立 `TcpClient(127.0.0.1, 5000)`
-6. 发送会话头
+2. 执行 `adb devices` 并选择目标设备
+3. 执行 `adb reverse tcp:5000 tcp:5000`
+4. 启动 TCP 服务器监听 `127.0.0.1:5000`
+5. 等待 Android 客户端接入
+6. 客户端接入后发送会话头
 7. 启动音频采集并发送音频帧
+
+LAN 模式：
+
+1. 启动 TCP 服务器监听 `0.0.0.0:6000`
+2. 启动 UDP 发现应答服务（端口 `9000`，响应 Android 探测广播）
+3. 等待 Android 客户端接入
+4. 客户端接入后发送会话头
+5. 启动音频采集并发送音频帧
 
 ### 3.2 Android 端流程
 
-1. 启动服务
-2. 创建 `ServerSocket(5000)`
-3. 阻塞等待连接
-4. 接收会话头
+1. 启动前台服务
+2. 解析连接目标（ADB 模式默认 `127.0.0.1:5000`；LAN 模式为发现列表或手动输入的 `WindowsIP:6000`）
+3. 以 TCP 客户端身份主动连接 Windows 服务器
+4. 连接成功后接收会话头
 5. 解析音频参数
 6. 初始化 `AudioTrack`
 7. 循环接收音频帧并播放
-8. 连接断开后释放资源并继续监听
+8. 连接断开后按重连策略自动重连
 
 ### 3.3 连接时序
 
 #### 初始化阶段
 
-- Android 端先进入监听状态
-- Windows 端建立 ADB 转发后发起连接
-- 连接成功后立即发送协议头
+- Windows 端先进入监听状态
+- Android 端建立连接后等待 Windows 发送协议头
+- Windows 端接受连接后立即发送会话头（`SessionInit`）
 
 #### 传输阶段
 
@@ -99,8 +112,28 @@ ADB 转发命令：
 
 #### 断开阶段
 
-- Windows 端停止推流时主动关闭 Socket
-- Android 端检测到流结束后停止播放并等待下次连接
+- 任一方主动关闭 Socket
+- Windows 端回到监听状态等待新客户端接入（单活跃客户端，新连接替换旧连接）
+- Android 端停止播放并按重连策略自动重连
+
+### 3.4 LAN 模式与设备发现
+
+LAN 模式采用 **Android 主动探测（pull）+ Windows 被动应答**：
+
+- **探测（Android → 广播 `255.255.255.255:9000`）**：
+  ```json
+  {"t":"winAudioBridgeProbe","app":"dev.ran.audiobridge","ver":1}
+  ```
+- **应答（Windows → 单播到探测来源）**：
+  ```json
+  {"t":"winAudioBridgeAnnounce","name":"<主机名>","host":"<本机IPv4>","port":6000,"ver":1}
+  ```
+
+行为约定：
+
+- Windows 端绑定 `0.0.0.0:9000` 监听 UDP，收到 `winAudioBridgeProbe` 后向来源单播回送公告
+- Android 端发送探测广播，接收应答并按「名称 + IP」去重维护服务器列表；`15s` 未收到应答则标记离线
+- 广播在 AP 隔离或跨网段时不可达，Android 端保留手动输入 IP 与端口的回退入口
 
 ## 4. 通信协议设计
 
@@ -139,6 +172,8 @@ ADB 转发命令：
 - `0x18`：心跳回执 `HeartbeatAck`（Android → Windows 存活确认）
 - `0x19`：Android 播放状态 `AndroidPlaybackStatus`（Android → Windows 播放端存活与延迟状态）
 - `0x1A`：Android 播放状态回执 `AndroidPlaybackStatusAck`（Windows → Android 状态接收确认）
+- `0x1B`：延迟探测 `LatencyProbe`（双向，payload 为 8 字节毫秒时间戳）
+- `0x1C`：延迟探测回执 `LatencyProbeAck`（回显收到的毫秒时间戳）
 
 MVP 阶段至少实现：
 
@@ -346,6 +381,26 @@ Android 端用于设置指定应用会话的音量或静音。
 
 附加状态中建议携带服务端最新主音量或会话状态，便于 Android 立即纠正本地 UI。
 
+### 4.15 延迟探测 `LatencyProbe` 与回执 `LatencyProbeAck`
+
+用于测量链路往返延迟（RTT）并估算单向延迟，帮助诊断卡顿。
+
+消息定义：
+
+- `LatencyProbe`（`0x1B`）：payload 为 **8 字节毫秒时间戳（UInt64，Little Endian）**，发送方记录发出时刻
+- `LatencyProbeAck`（`0x1C`）：payload **回显收到的 8 字节时间戳**
+
+测量方式：
+
+- Windows 端在推流期间每 `3s` 发送一次 `LatencyProbe`；Android 端收到后立即回送 `LatencyProbeAck`
+- Windows 端计算 `RTT = 当前时间 − 探测时间戳`，单向延迟 ≈ `RTT / 2`，对最近样本做滑动平均并在界面展示「估算延迟」
+- Android 端同样可发送 `LatencyProbe`，Windows 回送 `LatencyProbeAck`，Android 据此展示连接 RTT
+
+兼容性说明：
+
+- `LatencyProbe` 仅在 LAN 模式由 Windows 端发送（LAN 模式要求双端均为支持该消息的版本）
+- Android 端 `ProtocolReader` 对未知消息类型会报错，故新增消息需双端同步升级
+
 ## 5. 音频参数约定
 
 ### 5.1 推荐默认值
@@ -533,7 +588,7 @@ Android 端接收时需要满足：
 
 ### 8.2 Android 端异常
 
-- `ServerSocket` 启动失败
+- 连接 Windows 服务器失败
 - 收到非法协议包
 - `AudioTrack` 初始化失败
 - 播放过程中连接断开
@@ -542,7 +597,7 @@ Android 端接收时需要满足：
 
 - 关闭当前连接
 - 释放播放器资源
-- 回到监听状态
+- 按重连策略自动重连
 - 输出可诊断日志
 
 ## 9. 超时与重连策略
@@ -557,16 +612,19 @@ Android 端接收时需要满足：
 
 ### 9.2 重连策略
 
+统一拓扑下，Windows 作为服务器无法主动连接设备，因此重连责任在 Android 端，Windows 负责「服务器 + reverse 就绪」：
+
 Windows 端建议：
 
-- 首次失败立即提示
-- 推流中断后可自动尝试重连 `1~3` 次
-- 超过次数后进入人工恢复模式
+- 服务器始终监听并等待客户端接入（单活跃客户端，新连接替换旧连接）
+- ADB 模式下设备上线或电源恢复时重建 `adb reverse`
+- 客户端断开后回到监听状态，无需主动重连
 
 Android 端建议：
 
-- 单次连接结束后自动回到监听状态
-- 不因上次异常退出整个服务
+- 启动即尝试连接，失败按固定间隔（如 `3s`）自动重连
+- 断线后自动重连直至成功或用户停止
+- 支持连接目标切换（USB reverse / 发现列表 / 手动输入）
 
 ## 10. 日志与调试建议
 
@@ -574,19 +632,20 @@ Android 端建议：
 
 建议记录：
 
-- ADB 命令执行结果
-- Socket 连接建立与断开
+- ADB reverse 命令执行结果
+- 服务器监听启动与客户端接入
 - `SessionInit` 关键参数
 - 音频帧发送速率
-- 重连次数
+- 估算延迟（RTT/2）样本
+- 连接断开与客户端替换
 - 异常堆栈
 
 ### 10.2 Android 端日志
 
 建议记录：
 
-- 监听端口启动成功
-- 客户端连接来源
+- 连接目标与连接尝试结果
+- 重连次数与间隔
 - 会话参数
 - `AudioTrack` 初始化结果
 - 连续丢帧或乱序情况

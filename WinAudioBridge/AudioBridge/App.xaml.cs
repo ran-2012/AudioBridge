@@ -23,6 +23,7 @@ public partial class App : System.Windows.Application
 	private WindowsVolumeService? _windowsVolumeService;
 	private StreamingCoordinator? _streamingCoordinator;
 	private DeviceMonitorService? _deviceMonitorService;
+	private LanDiscoveryService? _lanDiscoveryService;
 	private MainWindow? _mainWindow;
 	private SettingsWindow? _settingsWindow;
 	private bool _isExiting;
@@ -80,6 +81,9 @@ public partial class App : System.Windows.Application
 			_settingsService, _adbService, _streamingCoordinator, _logService);
 		_deviceMonitorService.Start();
 
+		_lanDiscoveryService = new LanDiscoveryService(_settingsService, _logService);
+		_lanDiscoveryService.Start();
+
 		SystemEvents.PowerModeChanged += OnSystemPowerModeChanged;
 
 		_ = Dispatcher.BeginInvoke(async () =>
@@ -89,7 +93,7 @@ public partial class App : System.Windows.Application
 				return;
 			}
 
-			await _streamingCoordinator.AutoConnectIfPossibleAsync("启动后自动连接", restartIfRunning: false);
+			await _streamingCoordinator.EnsureServerReadyAsync("启动后确保服务器就绪，等待 Android 客户端接入", restartIfRunning: false);
 		});
 	}
 
@@ -112,7 +116,10 @@ public partial class App : System.Windows.Application
 			return;
 		}
 
-		await _streamingCoordinator.AutoConnectIfPossibleAsync("配置修改后自动连接", restartIfRunning: true);
+		// 连接模式 / 发现端口 / 开关变化时重启发现服务
+		_lanDiscoveryService?.Start();
+
+		await _streamingCoordinator.EnsureServerReadyAsync("配置修改后确保服务器就绪，等待 Android 客户端接入", restartIfRunning: true);
 	}
 
 	private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -234,8 +241,8 @@ public partial class App : System.Windows.Application
 			return;
 		}
 
-		await _streamingCoordinator.AutoConnectIfPossibleAsync(
-			"系统从睡眠恢复后自动连接",
+		await _streamingCoordinator.EnsureServerReadyAsync(
+			"系统从睡眠恢复后确保服务器与 reverse 就绪",
 			restartIfRunning: false);
 	}
 
@@ -262,6 +269,9 @@ public partial class App : System.Windows.Application
 
 		_deviceMonitorService?.Dispose();
 		_deviceMonitorService = null;
+
+		_lanDiscoveryService?.Dispose();
+		_lanDiscoveryService = null;
 
 		_trayService?.Dispose();
 		_trayService = null;

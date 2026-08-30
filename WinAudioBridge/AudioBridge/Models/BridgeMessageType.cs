@@ -17,5 +17,7 @@ public enum BridgeMessageType : ushort
     CommandAck = 0x17,
     HeartbeatAck = 0x18,
     AndroidPlaybackStatus = 0x19,
-    AndroidPlaybackStatusAck = 0x1A
+    AndroidPlaybackStatusAck = 0x1A,
+    LatencyProbe = 0x1B,
+    LatencyProbeAck = 0x1C
 }

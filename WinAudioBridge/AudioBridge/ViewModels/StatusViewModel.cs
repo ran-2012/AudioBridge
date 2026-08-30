@@ -21,6 +21,7 @@ public sealed class StatusViewModel : INotifyPropertyChanged
         _logService = logService;
         _settingsService.SettingsChanged += OnSettingsChanged;
         _streamingCoordinator.StatusChanged += OnStreamingStatusChanged;
+        _streamingCoordinator.LatencyUpdated += OnLatencyUpdated;
         _windowsVolumeService.SnapshotChanged += OnWindowsVolumeSnapshotChanged;
     }
 
@@ -49,6 +50,20 @@ public sealed class StatusViewModel : INotifyPropertyChanged
     public string TransportStatusText => _streamingCoordinator.Status.IsTransportConnected ? "已连接" : "未连接";
 
     public string CaptureStatusText => _streamingCoordinator.Status.IsCapturing ? "采集中" : "未采集";
+
+    public string ConnectionModeText => string.Equals(_settingsService.Current.ConnectionMode, "Lan", StringComparison.OrdinalIgnoreCase)
+        ? "局域网 (LAN)"
+        : "ADB (USB)";
+
+    public string ConnectedClientText => _streamingCoordinator.Status.IsTransportConnected
+        ? "已接入 Android 客户端"
+        : (_streamingCoordinator.Status.TargetDeviceName is { } name
+            ? $"等待接入：{name}"
+            : "等待客户端接入");
+
+    public string EstimatedLatencyText => _streamingCoordinator.EstimatedLatencyMillis is { } latency
+        ? $"{latency} ms（估算）"
+        : "待测量";
 
     public string WindowsVolumeMonitorText => _windowsVolumeService.IsMonitoring ? "监控中" : "未启动";
 
@@ -98,6 +113,7 @@ public sealed class StatusViewModel : INotifyPropertyChanged
         RaisePropertyChanged(nameof(BufferText));
         RaisePropertyChanged(nameof(AndroidPackageName));
         RaisePropertyChanged(nameof(PreferredDeviceText));
+        RaisePropertyChanged(nameof(ConnectionModeText));
     }
 
     private void OnStreamingStatusChanged(object? sender, EventArgs e)
@@ -107,9 +123,16 @@ public sealed class StatusViewModel : INotifyPropertyChanged
         RaisePropertyChanged(nameof(TargetDeviceText));
         RaisePropertyChanged(nameof(TransportStatusText));
         RaisePropertyChanged(nameof(CaptureStatusText));
+        RaisePropertyChanged(nameof(ConnectedClientText));
+        RaisePropertyChanged(nameof(EstimatedLatencyText));
         RaisePropertyChanged(nameof(CanPrepare));
         RaisePropertyChanged(nameof(CanStart));
         RaisePropertyChanged(nameof(CanStop));
+    }
+
+    private void OnLatencyUpdated(object? sender, EventArgs e)
+    {
+        RaisePropertyChanged(nameof(EstimatedLatencyText));
     }
 
     private void OnWindowsVolumeSnapshotChanged(object? sender, EventArgs e)

@@ -14,7 +14,9 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
     private static readonly TimeSpan LivenessTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan AndroidPlaybackStatusTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan AndroidPlaybackLatencyThreshold = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan LatencyProbeInterval = TimeSpan.FromSeconds(3);
     private const int AndroidPlaybackAbnormalRestartThreshold = 3;
+    private const int MaxLatencySamples = 10;
     private readonly SettingsService _settingsService;
     private readonly AdbService _adbService;
     private readonly AudioCaptureService _audioCaptureService;
@@ -33,7 +35,11 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
     private Task? _reconnectTask;
     private CancellationTokenSource? _heartbeatCancellationTokenSource;
     private Task? _heartbeatTask;
+    private CancellationTokenSource? _latencyProbeCancellationTokenSource;
+    private Task? _latencyProbeTask;
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
+    private readonly List<long> _latencySamples = new();
+    private long? _estimatedLatencyMillis;
     private uint _sequence;
     private bool _frameSendFaulted;
     private bool _isStopping;
@@ -72,13 +78,29 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
 
     public event EventHandler? StatusChanged;
 
+    /// <summary>估算的单向传输延迟（毫秒），无样本时为 null。</summary>
+    public long? EstimatedLatencyMillis => _estimatedLatencyMillis;
+
+    /// <summary>延迟估算值更新时触发（供 UI 实时刷新）。</summary>
+    public event EventHandler? LatencyUpdated;
+
     public async Task PrepareAsync(CancellationToken cancellationToken = default, bool requireAudioAppRunning = false)
     {
         try
         {
             var options = BuildOptions();
-            _logService.Info("Coordinator", $"开始准备链路：包名={options.AndroidAppPackageName}，优先设备={GetPreferredDeviceText(options.PreferredDeviceSerial)}。 ");
-            UpdateStatus(StreamingState.Preparing, "正在检查设备并建立 ADB 端口转发...", null, null);
+
+            if (IsLanMode(options.ConnectionMode))
+            {
+                _logService.Info("Coordinator", $"开始准备 LAN 链路：监听 0.0.0.0:{options.LocalPort}。");
+                UpdateStatus(StreamingState.Preparing, $"正在启动局域网服务器监听 :{options.LocalPort}...", null, null);
+                await _audioTransportService.StartListeningAsync("0.0.0.0", options.LocalPort, cancellationToken);
+                UpdateStatus(StreamingState.Ready, $"局域网服务器已就绪，监听 0.0.0.0:{options.LocalPort}，等待 Android 客户端接入。", null, null);
+                return;
+            }
+
+            _logService.Info("Coordinator", $"开始准备 ADB 链路：包名={options.AndroidAppPackageName}，优先设备={GetPreferredDeviceText(options.PreferredDeviceSerial)}。 ");
+            UpdateStatus(StreamingState.Preparing, "正在检查设备并建立 ADB reverse 转发...", null, null);
 
             var deviceResult = await _adbService.QueryConnectedDevicesAsync(options.AndroidAppPackageName, cancellationToken);
             if (!deviceResult.IsSuccess)
@@ -101,14 +123,15 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
 
             _logService.Info("Coordinator", $"已选择目标设备：{targetDevice.Model} ({targetDevice.Serial})。应用运行={targetDevice.IsAudioAppRunning}。 ");
 
-            var forwardResult = await _adbService.EnsurePortForwardAsync(targetDevice.Serial, options.LocalPort, options.RemotePort, cancellationToken);
-            if (!forwardResult.IsSuccess)
+            var reverseResult = await _adbService.EnsureReverseForwardAsync(targetDevice.Serial, options.RemotePort, options.LocalPort, cancellationToken);
+            if (!reverseResult.IsSuccess)
             {
-                UpdateStatus(StreamingState.Faulted, forwardResult.StatusMessage, targetDevice.Serial, targetDevice.Model);
+                UpdateStatus(StreamingState.Faulted, reverseResult.StatusMessage, targetDevice.Serial, targetDevice.Model);
                 return;
             }
 
-            UpdateStatus(StreamingState.Ready, forwardResult.StatusMessage, targetDevice.Serial, targetDevice.Model);
+            await _audioTransportService.StartListeningAsync("127.0.0.1", options.LocalPort, cancellationToken);
+            UpdateStatus(StreamingState.Ready, $"{reverseResult.StatusMessage} 服务器监听 127.0.0.1:{options.LocalPort}，等待 Android 客户端接入。", targetDevice.Serial, targetDevice.Model);
         }
         catch (OperationCanceledException)
         {
@@ -151,8 +174,8 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
 
             var options = BuildOptions();
             _logService.Info("Coordinator", "开始启动推流。 ");
-            UpdateStatus(StreamingState.Preparing, "正在建立 TCP 连接并发送初始化消息...", Status.TargetDeviceSerial, Status.TargetDeviceName);
-            await _audioTransportService.ConnectAsync("127.0.0.1", options.LocalPort, cancellationToken);
+            UpdateStatus(StreamingState.Preparing, "正在等待 Android 客户端接入并发送初始化消息...", Status.TargetDeviceSerial, Status.TargetDeviceName);
+            await _audioTransportService.AcceptClientAsync(cancellationToken);
             await _audioTransportService.SendSessionHeaderAsync(options, cancellationToken);
             await SendVolumeCatalogSnapshotAsync(0, includeIconsInline: true, cancellationToken);
             _sequence = 0;
@@ -164,9 +187,13 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
             _androidPlaybackStatusCount = 0;
             _consecutiveAbnormalPlaybackStatusCount = 0;
             _heartbeatCount = 0;
+            _latencySamples.Clear();
+            _estimatedLatencyMillis = null;
             CancelReconnectLoop();
             await CancelHeartbeatLoopAsync();
             StartHeartbeatLoop();
+            await CancelLatencyProbeLoopAsync();
+            StartLatencyProbeLoop();
             _audioCaptureService.Start();
             UpdateStatus(StreamingState.Streaming, "推流链路已建立，正在发送音频帧。", Status.TargetDeviceSerial, Status.TargetDeviceName);
         }
@@ -210,6 +237,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
             _isStopping = true;
             CancelReconnectLoop();
             await CancelHeartbeatLoopAsync();
+            await CancelLatencyProbeLoopAsync();
             _frameSendFaulted = true;
             await Task.Run(() => _audioCaptureService.Stop());
             await _audioTransportService.DisconnectAsync();
@@ -235,6 +263,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         _windowsVolumeService.SnapshotChanged -= OnWindowsVolumeSnapshotChanged;
         CancelReconnectLoop();
         CancelHeartbeatLoopAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+        CancelLatencyProbeLoopAsync().ConfigureAwait(false).GetAwaiter().GetResult();
         _audioCaptureService.Dispose();
         _audioTransportService.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
         _lifecycleLock.Dispose();
@@ -248,6 +277,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         _windowsVolumeService.SnapshotChanged -= OnWindowsVolumeSnapshotChanged;
         CancelReconnectLoop();
         await CancelHeartbeatLoopAsync().ConfigureAwait(false);
+        await CancelLatencyProbeLoopAsync().ConfigureAwait(false);
         _audioCaptureService.Dispose();
         await _audioTransportService.DisposeAsync().ConfigureAwait(false);
         _lifecycleLock.Dispose();
@@ -270,6 +300,35 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
             }
 
             _logService.Info("Coordinator", $"{reason}：开始检查是否满足自动连接条件。 ");
+            await StartStreamingCoreAsync(CancellationToken.None, requireAudioAppRunning: true).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// 确保 Windows 服务器监听与 adb reverse 就绪（服务器模式下等待 Android 客户端接入）。
+    /// 供设备上线与电源恢复等触发点调用，替代旧的“主动建立连接”语义。
+    /// </summary>
+    public async Task EnsureServerReadyAsync(string reason, bool restartIfRunning)
+    {
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (restartIfRunning && Status.State is StreamingState.Streaming or StreamingState.Preparing or StreamingState.Ready)
+            {
+                _logService.Info("Coordinator", $"{reason}：检测到当前链路活动，准备重建服务器就绪状态。 ");
+                await StopStreamingCoreAsync().ConfigureAwait(false);
+            }
+
+            if (Status.State is StreamingState.Streaming or StreamingState.Preparing)
+            {
+                return;
+            }
+
+            _logService.Info("Coordinator", $"{reason}：开始确保服务器监听与 reverse 就绪，等待 Android 客户端接入。 ");
             await StartStreamingCoreAsync(CancellationToken.None, requireAudioAppRunning: true).ConfigureAwait(false);
         }
         finally
@@ -328,6 +387,12 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
                 case BridgeMessageType.AndroidPlaybackStatus:
                     await HandleAndroidPlaybackStatusAsync(e.GetPayloadAsUtf8());
                     break;
+                case BridgeMessageType.LatencyProbeAck:
+                    HandleLatencyProbeAck(e.Payload);
+                    break;
+                case BridgeMessageType.LatencyProbe:
+                    await HandleLatencyProbeAsync(e.Payload);
+                    break;
             }
         }
         catch (Exception ex)
@@ -378,6 +443,9 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
             );
         }
 
+        var isLan = IsLanMode(settings.ConnectionMode);
+        var listenPort = isLan ? settings.LanListenPort : 5000;
+
         var options = new StreamingSessionOptions
         {
             Encoding = transportEncoding,
@@ -386,8 +454,9 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
             BufferMilliseconds = settings.BufferMilliseconds,
             AndroidAppPackageName = settings.AndroidAppPackageName,
             PreferredDeviceSerial = settings.PreferredDeviceSerial,
-            LocalPort = 5000,
-            RemotePort = 5000
+            ConnectionMode = settings.ConnectionMode,
+            LocalPort = listenPort,
+            RemotePort = listenPort
         };
 
         _activeCaptureFormat = captureFormat;
@@ -492,6 +561,130 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         {
             // ignore
         }
+    }
+
+    private void StartLatencyProbeLoop()
+    {
+        _latencyProbeCancellationTokenSource = new CancellationTokenSource();
+        _latencyProbeTask = Task.Run(() => LatencyProbeLoopAsync(_latencyProbeCancellationTokenSource.Token));
+    }
+
+    private async Task CancelLatencyProbeLoopAsync()
+    {
+        var cancellationTokenSource = _latencyProbeCancellationTokenSource;
+        var latencyProbeTask = _latencyProbeTask;
+
+        _latencyProbeCancellationTokenSource = null;
+        _latencyProbeTask = null;
+
+        if (cancellationTokenSource is null)
+        {
+            return;
+        }
+
+        cancellationTokenSource.Cancel();
+        cancellationTokenSource.Dispose();
+
+        if (latencyProbeTask is null)
+        {
+            return;
+        }
+
+        if (latencyProbeTask.Id == Task.CurrentId)
+        {
+            return;
+        }
+
+        try
+        {
+            await latencyProbeTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
+    }
+
+    private async Task LatencyProbeLoopAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(LatencyProbeInterval);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                if (!_audioTransportService.IsConnected || _isStopping)
+                {
+                    continue;
+                }
+
+                if (!_settingsService.Current.EnableLatencyDisplay)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await _audioTransportService.SendLatencyProbeAsync(cancellationToken);
+                    MarkTransportActivity();
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _logService.Warning("Coordinator", $"发送延迟探测失败：{ex.Message}");
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
+    }
+
+    private void HandleLatencyProbeAck(byte[] payload)
+    {
+        if (payload is null || payload.Length < 8)
+        {
+            return;
+        }
+
+        var sentTimestamp = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(0, 8));
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var rtt = now - sentTimestamp;
+        if (rtt < 0)
+        {
+            return;
+        }
+
+        var oneWay = rtt / 2;
+        _latencySamples.Add(oneWay);
+        if (_latencySamples.Count > MaxLatencySamples)
+        {
+            _latencySamples.RemoveAt(0);
+        }
+
+        _estimatedLatencyMillis = (long)_latencySamples.Average();
+        LatencyUpdated?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async Task HandleLatencyProbeAsync(byte[] payload)
+    {
+        if (payload is null || payload.Length < 8)
+        {
+            return;
+        }
+
+        var sendTimestampMillis = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(0, 8));
+        await _audioTransportService.SendLatencyProbeAckAsync(sendTimestampMillis, CancellationToken.None);
+        MarkTransportActivity();
+    }
+
+    internal static bool IsLanMode(string? connectionMode)
+    {
+        return string.Equals(connectionMode, "Lan", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task HeartbeatLoopAsync(CancellationToken cancellationToken)
@@ -629,6 +822,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         _logService.Error("Coordinator", $"{operation}：{ex.Message}");
         _audioCaptureService.Stop();
         await CancelHeartbeatLoopAsync();
+        await CancelLatencyProbeLoopAsync();
         await _audioTransportService.DisconnectAsync();
         UpdateStatus(StreamingState.Faulted, $"{operation}：{ex.Message}", Status.TargetDeviceSerial, Status.TargetDeviceName);
         ScheduleReconnect("音频链路断开，准备自动重连。");
@@ -910,7 +1104,9 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
             TargetDeviceSerial = serial,
             TargetDeviceName = name,
             IsTransportConnected = _audioTransportService.IsConnected,
-            IsCapturing = _audioCaptureService.IsCapturing
+            IsCapturing = _audioCaptureService.IsCapturing,
+            ConnectionMode = _settingsService.Current.ConnectionMode,
+            EstimatedLatencyMillis = _estimatedLatencyMillis
         };
 
         StatusChanged?.Invoke(this, EventArgs.Empty);

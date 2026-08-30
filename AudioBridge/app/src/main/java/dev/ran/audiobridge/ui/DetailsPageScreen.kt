@@ -146,7 +146,7 @@ internal fun DetailsPageScreen(
             }
         }
 
-        Text("提示：服务启动后会在后台监听 5000 端口，并通过通知栏保持前台服务状态。")
+        Text("提示：服务启动后会自动连接 Windows 服务器（USB 模式连接本机 reverse 端口，局域网模式连接所选服务器），并通过通知栏保持前台服务状态。")
         Spacer(modifier = Modifier.height(8.dp))
     }
 }

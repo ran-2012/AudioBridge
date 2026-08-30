@@ -195,4 +195,20 @@ public sealed class StreamingCoordinatorTests
 
         Assert.Null(selected);
     }
+
+    [Fact]
+    public void IsLanMode_ShouldReturnTrue_ForLanValues()
+    {
+        Assert.True(StreamingCoordinator.IsLanMode("Lan"));
+        Assert.True(StreamingCoordinator.IsLanMode("lan"));
+    }
+
+    [Fact]
+    public void IsLanMode_ShouldReturnFalse_ForAdbOrNullOrEmpty()
+    {
+        Assert.False(StreamingCoordinator.IsLanMode("Adb"));
+        Assert.False(StreamingCoordinator.IsLanMode("adb"));
+        Assert.False(StreamingCoordinator.IsLanMode(null));
+        Assert.False(StreamingCoordinator.IsLanMode(string.Empty));
+    }
 }

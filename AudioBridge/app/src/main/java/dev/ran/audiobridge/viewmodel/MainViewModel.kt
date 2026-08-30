@@ -12,6 +12,7 @@ import dev.ran.audiobridge.audio.PlaybackCacheConfig
 import dev.ran.audiobridge.data.VolumePreferencesRepository
 import dev.ran.audiobridge.model.HiddenWindowsAppSupport
 import dev.ran.audiobridge.model.WindowsAppVolumeSession
+import dev.ran.audiobridge.network.LanDiscoveryClient
 import dev.ran.audiobridge.repository.PlaybackStateRepository
 import dev.ran.audiobridge.service.AudioBridgeService
 import kotlinx.coroutines.flow.combine
@@ -21,6 +22,7 @@ import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val volumePreferencesRepository = VolumePreferencesRepository(application)
+    private val lanDiscoveryClient = LanDiscoveryClient()
     private var hasAutoStartedService = false
 
     val uiState = PlaybackStateRepository.state.stateIn(
@@ -31,6 +33,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshBatteryOptimizationState()
+
+        viewModelScope.launch {
+            lanDiscoveryClient.startScanning()
+            lanDiscoveryClient.servers.collect { servers ->
+                PlaybackStateRepository.updateLanServers(servers)
+            }
+        }
 
         viewModelScope.launch {
             volumePreferencesRepository.volumeFlow.collect { volume ->
@@ -78,6 +87,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         PlaybackStateRepository.appendLog("UI: 用户请求启动后台播放")
         context.startForegroundService(AudioBridgeService.createStartIntent(context))
+    }
+
+    /** 连接 USB（adb reverse）模式的本机 reverse 端口。 */
+    fun connectUsb() {
+        val context = getApplication<Application>()
+        PlaybackStateRepository.appendLog("UI: 用户选择 USB 连接（reverse 端口）")
+        context.startForegroundService(AudioBridgeService.createStartIntent(context))
+    }
+
+    /** 连接指定的局域网 Windows 服务器。 */
+    fun connectLanServer(host: String, port: Int) {
+        val context = getApplication<Application>()
+        PlaybackStateRepository.appendLog("UI: 用户选择局域网服务器 $host:$port")
+        context.startForegroundService(AudioBridgeService.createConnectIntent(context, host, port))
     }
 
     fun autoStartServiceIfNeeded() {

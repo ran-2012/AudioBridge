@@ -22,13 +22,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.OutputStream
-import java.net.ServerSocket
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicInteger
 
 class AudioBridgeService : Service() {
@@ -36,6 +41,7 @@ class AudioBridgeService : Service() {
         private const val ACTION_START = "dev.ran.audiobridge.action.START"
         private const val ACTION_STOP = "dev.ran.audiobridge.action.STOP"
         private const val ACTION_RESTART = "dev.ran.audiobridge.action.RESTART"
+        private const val ACTION_CONNECT = "dev.ran.audiobridge.action.CONNECT"
         private const val ACTION_SET_VOLUME = "dev.ran.audiobridge.action.SET_VOLUME"
         private const val ACTION_SET_PLAYBACK_CACHE = "dev.ran.audiobridge.action.SET_PLAYBACK_CACHE"
         private const val ACTION_REQUEST_WINDOWS_VOLUME = "dev.ran.audiobridge.action.REQUEST_WINDOWS_VOLUME"
@@ -47,7 +53,12 @@ class AudioBridgeService : Service() {
         private const val EXTRA_PLAYBACK_CACHE_MILLISECONDS = "extra_playback_cache_milliseconds"
         private const val EXTRA_MUTED = "extra_muted"
         private const val EXTRA_SESSION_ID = "extra_session_id"
-        private const val SERVER_PORT = 5000
+        private const val EXTRA_CONNECT_HOST = "extra_connect_host"
+        private const val EXTRA_CONNECT_PORT = "extra_connect_port"
+        private const val DEFAULT_HOST = "127.0.0.1"
+        private const val DEFAULT_PORT = 5000
+        private const val CONNECT_TIMEOUT_MILLIS = 5_000
+        private const val RECONNECT_DELAY_MILLIS = 3_000L
         private const val HEARTBEAT_LOG_INTERVAL = 12
         private const val PLAYBACK_STATUS_INTERVAL_MILLIS = 3_000L
         private const val PLAYBACK_STATUS_LOG_INTERVAL = 10
@@ -63,6 +74,12 @@ class AudioBridgeService : Service() {
 
         fun createRestartIntent(context: Context) = Intent(context, AudioBridgeService::class.java).apply {
             action = ACTION_RESTART
+        }
+
+        fun createConnectIntent(context: Context, host: String, port: Int) = Intent(context, AudioBridgeService::class.java).apply {
+            action = ACTION_CONNECT
+            putExtra(EXTRA_CONNECT_HOST, host)
+            putExtra(EXTRA_CONNECT_PORT, port)
         }
 
         fun createVolumeIntent(context: Context, volume: Float) = Intent(context, AudioBridgeService::class.java).apply {
@@ -100,6 +117,17 @@ class AudioBridgeService : Service() {
             putExtra(EXTRA_SESSION_ID, sessionId)
             putExtra(EXTRA_MUTED, muted)
         }
+
+        /**
+         * 解析连接目标：优先使用显式指定的 host/port（LAN 手动/发现），否则回退到 USB reverse 本机端口。
+         * 抽取为纯函数以便单元测试。
+         */
+        internal fun resolveConnectTarget(explicitHost: String?, explicitPort: Int): Pair<String, Int> =
+            if (!explicitHost.isNullOrBlank() && explicitPort > 0) {
+                explicitHost to explicitPort
+            } else {
+                DEFAULT_HOST to DEFAULT_PORT
+            }
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -107,8 +135,8 @@ class AudioBridgeService : Service() {
     private val playbackManager = AudioPlaybackManager()
     private lateinit var notificationController: NotificationController
     private lateinit var volumePreferencesRepository: VolumePreferencesRepository
-    private var serverJob: Job? = null
-    private var serverSocket: ServerSocket? = null
+    private var connectJob: Job? = null
+    private var activeSocket: Socket? = null
     private var activeClientOutputStream: OutputStream? = null
     private val requestIdGenerator = AtomicInteger(1)
     private val outputLock = Any()
@@ -139,6 +167,10 @@ class AudioBridgeService : Service() {
             ACTION_START -> startBridge()
             ACTION_STOP -> stopBridge()
             ACTION_RESTART -> restartBridge()
+            ACTION_CONNECT -> startBridge(
+                host = intent.getStringExtra(EXTRA_CONNECT_HOST),
+                port = intent.getIntExtra(EXTRA_CONNECT_PORT, -1),
+            )
             ACTION_SET_VOLUME -> updateVolume(intent.getFloatExtra(EXTRA_VOLUME, 1.0f))
             ACTION_SET_PLAYBACK_CACHE -> updatePlaybackCacheMilliseconds(intent.getIntExtra(EXTRA_PLAYBACK_CACHE_MILLISECONDS, PlaybackCacheConfig.DEFAULT_MILLISECONDS))
             ACTION_REQUEST_WINDOWS_VOLUME -> requestWindowsVolumeSnapshot()
@@ -159,10 +191,16 @@ class AudioBridgeService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startBridge() {
-        if (serverJob?.isActive == true) {
+    private fun startBridge(host: String? = null, port: Int = -1) {
+        if (connectJob?.isActive == true && host == null) {
             PlaybackStateRepository.appendLog("Service: 后台服务已在运行，忽略重复启动")
             return
+        }
+
+        // 用户显式指定了新的连接目标：先停旧连接再按新目标重连
+        if (host != null) {
+            PlaybackStateRepository.appendLog("Service: 收到新的连接目标，重启连接流程 $host:$port")
+            stopBridge(stopSelfAfterStop = false)
         }
 
         acquireWakeLock()
@@ -171,12 +209,12 @@ class AudioBridgeService : Service() {
 
         startForeground(
             NotificationController.NOTIFICATION_ID,
-            notificationController.build("后台服务运行中，等待 Windows 连接"),
+            notificationController.build("后台服务运行中，正在连接 Windows"),
         )
-        PlaybackStateRepository.updateServiceRunning(true, "后台服务已启动，等待 Windows 连接")
-        PlaybackStateRepository.appendLog("Service: 前台服务已启动，开始监听端口 $SERVER_PORT")
+        PlaybackStateRepository.updateServiceRunning(true, "后台服务已启动，正在连接 Windows")
+        PlaybackStateRepository.appendLog("Service: 前台服务已启动，开始连接 Windows 服务器")
 
-        serverJob = serviceScope.launch {
+        connectJob = serviceScope.launch {
             val initialVolume = volumePreferencesRepository.volumeFlow.first()
             val initialPlaybackCacheMilliseconds = volumePreferencesRepository.playbackCacheMillisecondsFlow.first()
             playbackManager.updateVolume(initialVolume)
@@ -186,54 +224,76 @@ class AudioBridgeService : Service() {
             PlaybackStateRepository.appendLog("Service: 已加载音量设置 ${(initialVolume * 100).toInt()}%")
             PlaybackStateRepository.appendLog("Service: 已加载播放缓存 ${initialPlaybackCacheMilliseconds}ms")
 
-            runCatching {
-                ServerSocket(SERVER_PORT).use { socket ->
-                    serverSocket = socket
-                    PlaybackStateRepository.appendLog("Network: ServerSocket 已监听 0.0.0.0:$SERVER_PORT")
-                    while (true) {
-                        PlaybackStateRepository.appendLog("Network: 等待 Windows 建立连接")
-                        val client = socket.accept()
-                        PlaybackStateRepository.updateConnection(true, "已建立 Windows 连接，等待初始化消息")
-                        PlaybackStateRepository.appendLog("Network: 客户端已连接 ${client.inetAddress.hostAddress}:${client.port}")
-                        notificationController.ensureChannel()
-                        startForeground(
-                            NotificationController.NOTIFICATION_ID,
-                            notificationController.build("已连接 Windows，正在接收音频"),
-                        )
+            connectLoop(host, port)
+        }
+    }
 
-                        client.use { incoming ->
-                            synchronized(outputLock) {
-                                activeClientOutputStream = incoming.getOutputStream()
-                            }
-                            playbackStatusSequence = 0u
-                            lastAudioSequence = 0u
-                            lastAudioFrameElapsedRealtime = 0L
-                            playbackStatusJob = startPlaybackStatusLoop()
-                            runCatching {
-                                handleClient(incoming)
-                            }.onFailure { throwable ->
-                                PlaybackStateRepository.appendLog("Network: 连接中断 ${throwable.message ?: "未知错误"}")
-                                PlaybackStateRepository.updateError("连接中断：${throwable.message ?: "未知错误"}")
-                            }
-                            playbackStatusJob?.cancel()
-                            playbackStatusJob = null
-                            synchronized(outputLock) {
-                                activeClientOutputStream = null
-                            }
-                        }
+    /**
+     * 客户端连接主循环：主动连接 Windows 服务器，断线后按固定间隔自动重连。
+     */
+    private suspend fun connectLoop(explicitHost: String?, explicitPort: Int) {
+        var attempt = 0
+        var lastTarget: Pair<String, Int>? = null
 
-                        PlaybackStateRepository.appendLog("Network: 当前连接已关闭，释放 AudioTrack")
-                        PlaybackStateRepository.updateConnection(false, "连接已断开，等待重新连接")
-                        PlaybackStateRepository.updatePlayback(false, "播放已停止，等待新的连接")
-                        playbackManager.release()
-                    }
-                }
-            }.onFailure { throwable ->
-                if (throwable !is SocketException) {
-                    PlaybackStateRepository.appendLog("Service: 服务异常 ${throwable.message ?: "未知错误"}")
-                    PlaybackStateRepository.updateError("服务异常：${throwable.message ?: "未知错误"}")
-                }
+        while (currentCoroutineContext().isActive) {
+            attempt++
+            val target = resolveConnectTarget(explicitHost, explicitPort)
+            if (lastTarget != target) {
+                lastTarget = target
+                PlaybackStateRepository.updateConnectTarget(target.first, target.second)
+                PlaybackStateRepository.appendLog("Network: 连接目标 ${target.first}:${target.second}")
             }
+
+            val (connectHost, connectPort) = target
+            PlaybackStateRepository.appendLog("Network: 尝试连接 $connectHost:$connectPort（第 $attempt 次）")
+
+            runCatching {
+                val socket = Socket()
+                socket.tcpNoDelay = true
+                socket.connect(InetSocketAddress(connectHost, connectPort), CONNECT_TIMEOUT_MILLIS)
+                activeSocket = socket
+                synchronized(outputLock) {
+                    activeClientOutputStream = socket.getOutputStream()
+                }
+                playbackStatusSequence = 0u
+                lastAudioSequence = 0u
+                lastAudioFrameElapsedRealtime = 0L
+                lastPacketElapsedRealtime = SystemClock.elapsedRealtime()
+
+                PlaybackStateRepository.updateConnection(true, "已连接 Windows $connectHost:$connectPort，等待初始化消息")
+                PlaybackStateRepository.appendLog("Network: 已连接 $connectHost:$connectPort")
+                notificationController.ensureChannel()
+                startForeground(
+                    NotificationController.NOTIFICATION_ID,
+                    notificationController.build("已连接 Windows，正在接收音频"),
+                )
+
+                playbackStatusJob = startPlaybackStatusLoop()
+                runCatching {
+                    handleClient(socket)
+                }.onFailure { throwable ->
+                    PlaybackStateRepository.appendLog("Network: 连接中断 ${throwable.message ?: "未知错误"}")
+                    PlaybackStateRepository.updateError("连接中断：${throwable.message ?: "未知错误"}")
+                }
+                playbackStatusJob?.cancel()
+                playbackStatusJob = null
+                synchronized(outputLock) {
+                    activeClientOutputStream = null
+                }
+                runCatching { socket.close() }
+                activeSocket = null
+
+                PlaybackStateRepository.appendLog("Network: 当前连接已关闭，释放 AudioTrack")
+                PlaybackStateRepository.updateConnection(false, "连接已断开，准备自动重连")
+                PlaybackStateRepository.updatePlayback(false, "播放已停止，准备自动重连")
+                playbackManager.release()
+            }.onFailure { throwable ->
+                PlaybackStateRepository.appendLog("Network: 连接失败 ${throwable.message ?: "未知错误"}")
+                PlaybackStateRepository.updateConnection(false, "连接失败，准备自动重连")
+                playbackManager.release()
+            }
+
+            delay(RECONNECT_DELAY_MILLIS)
         }
     }
 
@@ -287,6 +347,16 @@ class AudioBridgeService : Service() {
                             "Protocol: 收到保活心跳并回送 ACK heartbeatCount=$heartbeatCount idle=${idleMillis}ms",
                         )
                     }
+                }
+
+                is BridgePacket.LatencyProbe -> {
+                    markPacketReceived()
+                    sendLatencyProbeAck(packet.sendTimestampMillis)
+                }
+
+                is BridgePacket.LatencyProbeAck -> {
+                    markPacketReceived()
+                    handleLatencyProbeAck(packet.sendTimestampMillis)
                 }
 
                 is BridgePacket.VolumeCatalogSnapshot -> {
@@ -442,10 +512,42 @@ class AudioBridgeService : Service() {
         }
     }
 
+    private fun sendLatencyProbeAck(sendTimestampMillis: Long) {
+        val payload = ByteBuffer.allocate(8)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(sendTimestampMillis)
+            .array()
+        runCatching {
+            writePacketToActiveClient(BridgeMessageType.LATENCY_PROBE_ACK, payload)
+        }.onFailure { throwable ->
+            PlaybackStateRepository.appendLog("Protocol: 回送延迟探测 ACK 失败：${throwable.message ?: "未知错误"}")
+        }
+    }
+
     private fun startPlaybackStatusLoop(): Job = serviceScope.launch {
         while (isActive) {
             sendPlaybackStatus()
+            sendLatencyProbe()
             delay(PLAYBACK_STATUS_INTERVAL_MILLIS)
+        }
+    }
+
+    private fun sendLatencyProbe() {
+        val payload = ByteBuffer.allocate(8)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(System.currentTimeMillis())
+            .array()
+        runCatching {
+            writePacketToActiveClient(BridgeMessageType.LATENCY_PROBE, payload)
+        }.onFailure {
+            // 发送失败静默处理，由连接中断逻辑统一处理
+        }
+    }
+
+    private fun handleLatencyProbeAck(sendTimestampMillis: Long) {
+        val rtt = System.currentTimeMillis() - sendTimestampMillis
+        if (rtt >= 0) {
+            PlaybackStateRepository.updateRttMillis(rtt)
         }
     }
 
@@ -518,10 +620,10 @@ class AudioBridgeService : Service() {
 
     private fun stopBridge(stopSelfAfterStop: Boolean = true) {
         PlaybackStateRepository.appendLog("Service: 正在停止后台服务")
-        serverJob?.cancel()
-        serverJob = null
-        serverSocket?.close()
-        serverSocket = null
+        connectJob?.cancel()
+        connectJob = null
+        activeSocket?.close()
+        activeSocket = null
         playbackStatusJob?.cancel()
         playbackStatusJob = null
         synchronized(outputLock) {
@@ -530,7 +632,7 @@ class AudioBridgeService : Service() {
         playbackManager.release()
         releaseWakeLock()
         PlaybackStateRepository.updateServiceRunning(false, "后台服务已停止")
-        PlaybackStateRepository.appendLog("Service: 后台服务已停止，监听与播放资源已释放")
+        PlaybackStateRepository.appendLog("Service: 后台服务已停止，连接与播放资源已释放")
         stopForeground(STOP_FOREGROUND_REMOVE)
         if (stopSelfAfterStop) {
             stopSelf()

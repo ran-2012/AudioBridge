@@ -25,6 +25,14 @@ object BridgeFrameEncoder {
 
     fun encodeHeartbeatAck(): ByteArray = encodeHeader(BridgeMessageType.HEARTBEAT_ACK, 0)
 
+    fun encodeLatencyProbeAck(sendTimestampMillis: Long): ByteArray {
+        val payload = ByteBuffer.allocate(8)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(sendTimestampMillis)
+            .array()
+        return encodePacket(BridgeMessageType.LATENCY_PROBE_ACK, payload)
+    }
+
     fun encodePacket(messageType: Int, payload: ByteArray): ByteArray {
         val header = encodeHeader(messageType, payload.size)
         return ByteArray(header.size + payload.size).also { packet ->

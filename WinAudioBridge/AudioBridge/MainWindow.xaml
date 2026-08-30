@@ -78,7 +78,7 @@
                     CornerRadius="8">
                 <StackPanel>
                     <TextBlock FontSize="16" FontWeight="SemiBold" Text="推流骨架状态" />
-                    <UniformGrid Margin="0,12,0,0" Columns="2" Rows="9">
+                    <UniformGrid Margin="0,12,0,0" Columns="2" Rows="12">
                         <TextBlock FontWeight="SemiBold" Text="协调器状态" />
                         <TextBlock Text="{Binding CoordinatorStateText}" />
                         <TextBlock FontWeight="SemiBold" Text="状态说明" />
@@ -93,6 +93,14 @@
                         <TextBlock Text="{Binding TransportStatusText}" />
                         <TextBlock FontWeight="SemiBold" Text="采集状态" />
                         <TextBlock Text="{Binding CaptureStatusText}" />
+                        <TextBlock FontWeight="SemiBold" Text="连接模式" />
+                        <TextBlock Text="{Binding ConnectionModeText}" />
+                        <TextBlock FontWeight="SemiBold" Text="客户端" />
+                        <TextBlock Text="{Binding ConnectedClientText}"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding ConnectedClientText}" />
+                        <TextBlock FontWeight="SemiBold" Text="估算延迟" />
+                        <TextBlock Text="{Binding EstimatedLatencyText}" />
                         <TextBlock FontWeight="SemiBold" Text="音量监控" />
                         <TextBlock Text="{Binding WindowsVolumeMonitorText}" />
                         <TextBlock FontWeight="SemiBold" Text="主音量" />

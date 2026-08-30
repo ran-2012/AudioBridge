@@ -151,9 +151,9 @@ public sealed class DeviceMonitorService : IDisposable
         }
 
         _logService.Info("DeviceMonitor",
-            $"检测到设备 {triggeredDevice!.Model} ({triggeredDevice.Serial}) 已上线且应用运行中，准备触发自动连接。");
-        _ = _streamingCoordinator.AutoConnectIfPossibleAsync(
-            "设备状态监控检测到目标设备上线",
+            $"检测到设备 {triggeredDevice!.Model} ({triggeredDevice.Serial}) 已上线且应用运行中，准备确保服务器与 reverse 就绪。");
+        _ = _streamingCoordinator.EnsureServerReadyAsync(
+            "设备状态监控检测到目标设备上线，确保服务器与 reverse 就绪",
             restartIfRunning: false);
     }
 

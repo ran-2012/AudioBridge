@@ -2,6 +2,7 @@ package dev.ran.audiobridge.repository
 
 import android.util.Log
 import dev.ran.audiobridge.model.HiddenWindowsApp
+import dev.ran.audiobridge.model.LanServerInfo
 import dev.ran.audiobridge.model.PlaybackSessionInfo
 import dev.ran.audiobridge.model.PlaybackUiState
 import dev.ran.audiobridge.model.WindowsAppVolumeSession
@@ -35,6 +36,18 @@ object PlaybackStateRepository {
             isPlaying = if (isConnected) mutableState.value.isPlaying else false,
             windowsVolumeStatusMessage = if (isConnected) mutableState.value.windowsVolumeStatusMessage else "Windows 未连接",
         )
+    }
+
+    fun updateConnectTarget(host: String, port: Int) {
+        mutableState.value = mutableState.value.copy(connectTarget = "$host:$port")
+    }
+
+    fun updateRttMillis(rttMillis: Long?) {
+        mutableState.value = mutableState.value.copy(rttMillis = rttMillis)
+    }
+
+    fun updateLanServers(servers: List<LanServerInfo>) {
+        mutableState.value = mutableState.value.copy(lanServers = servers)
     }
 
     fun updatePlayback(isPlaying: Boolean, statusMessage: String) {

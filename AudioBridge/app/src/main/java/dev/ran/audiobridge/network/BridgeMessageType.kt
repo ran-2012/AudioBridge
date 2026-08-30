@@ -17,4 +17,6 @@ object BridgeMessageType {
     const val HEARTBEAT_ACK = 0x18
     const val ANDROID_PLAYBACK_STATUS = 0x19
     const val ANDROID_PLAYBACK_STATUS_ACK = 0x1A
+    const val LATENCY_PROBE = 0x1B
+    const val LATENCY_PROBE_ACK = 0x1C
 }

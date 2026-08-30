@@ -69,6 +69,8 @@ fun AudioBridgeScreen(
     onStartService: () -> Unit,
     onStopService: () -> Unit,
     onRestartService: () -> Unit,
+    onConnectUsb: () -> Unit,
+    onConnectLanServer: (String, Int) -> Unit,
     onVolumeChanged: (Float) -> Unit,
     onPlaybackCacheChanged: (Int) -> Unit,
     onApplyScreenOffPlaybackCachePreset: () -> Unit,
@@ -133,6 +135,8 @@ fun AudioBridgeScreen(
             AudioBridgePage.Main -> MainPageScreen(
                 uiState = uiState,
                 contentPadding = innerPadding,
+                onConnectUsb = onConnectUsb,
+                onConnectLanServer = onConnectLanServer,
                 onVolumeChanged = onVolumeChanged,
                 onPlaybackCacheChanged = onPlaybackCacheChanged,
                 onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
@@ -179,6 +183,12 @@ internal fun RunningStatusCard(uiState: PlaybackUiState) {
                     Text(status.description, style = MaterialTheme.typography.bodyMedium)
                     Text(uiState.statusMessage, style = MaterialTheme.typography.bodySmall)
                 }
+            }
+            uiState.connectTarget?.let { target ->
+                Text("连接目标：$target", style = MaterialTheme.typography.bodySmall)
+            }
+            uiState.rttMillis?.let { rtt ->
+                Text("往返延迟（RTT）：约 $rtt ms", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

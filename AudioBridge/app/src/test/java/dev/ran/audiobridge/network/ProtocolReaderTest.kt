@@ -123,6 +123,32 @@ class ProtocolReaderTest {
     }
 
     @Test
+    fun readPacket_shouldParseLatencyProbe() {
+        val payload = ByteBuffer.allocate(8)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(1_700_000_000_123L)
+            .array()
+
+        val packet = reader.readPacket(ByteArrayInputStream(createPacket(BridgeMessageType.LATENCY_PROBE, payload)))
+
+        val probe = packet as BridgePacket.LatencyProbe
+        assertEquals(1_700_000_000_123L, probe.sendTimestampMillis)
+    }
+
+    @Test
+    fun readPacket_shouldParseLatencyProbeAck() {
+        val payload = ByteBuffer.allocate(8)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(1_700_000_000_456L)
+            .array()
+
+        val packet = reader.readPacket(ByteArrayInputStream(createPacket(BridgeMessageType.LATENCY_PROBE_ACK, payload)))
+
+        val ack = packet as BridgePacket.LatencyProbeAck
+        assertEquals(1_700_000_000_456L, ack.sendTimestampMillis)
+    }
+
+    @Test
     fun readPacket_shouldRejectInvalidMagic() {
         val bytes = createPacket(BridgeMessageType.COMMAND_ACK, ByteArray(0)).clone()
         ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).putInt(0x12345678)
