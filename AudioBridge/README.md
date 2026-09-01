@@ -6,7 +6,7 @@
 
 Android 端当前承担两类职责：
 
-1. 作为接收端监听 TCP 连接，接收 Windows 端推送的音频流并播放。
+1. 作为接收端以 TCP 客户端身份**主动连接** Windows 服务器，接收音频流并播放。
 2. 作为控制端展示 Windows 主音量与应用会话音量，并向 Windows 发送控制命令。
 
 它**不负责**：
@@ -27,7 +27,7 @@ Android 端当前承担两类职责：
 - 后台执行：Android 前台 `Service` + Kotlin Coroutines
 - 本地持久化：DataStore Preferences
 - 音频播放：`AudioTrack`
-- 网络：原生 `ServerSocket` / `InputStream`
+- 网络：原生 `Socket`（TCP 客户端，主动连接 + 断线自动重连）/ `InputStream`
 - JSON：`org.json`
 
 Android 配置入口见 [app/build.gradle.kts](app/build.gradle.kts)。应用清单位于 [app/src/main/AndroidManifest.xml](app/src/main/AndroidManifest.xml)。
@@ -76,7 +76,7 @@ Android 端核心代码位于 [app/src/main/java/dev/ran/audiobridge](app/src/ma
 - [app/src/main/java/dev/ran/audiobridge/service/AudioBridgeService.kt](app/src/main/java/dev/ran/audiobridge/service/AudioBridgeService.kt)
   - Android 端最核心的运行时组件
   - 以前台服务形式常驻
-  - 在 `5000` 端口监听来自 Windows 的连接
+  - 作为 TCP 客户端主动连接 Windows（USB reverse / 局域网发现 / 手动输入），断线自动重连
   - 读取协议包并分发处理
   - 驱动 `AudioPlaybackManager` 播放音频
   - 发送 Windows 音量控制命令
@@ -158,7 +158,7 @@ Android 端核心代码位于 [app/src/main/java/dev/ran/audiobridge](app/src/ma
 2. `MainViewModel.autoStartServiceIfNeeded()` 被调用。
 3. ViewModel 通过 `startForegroundService()` 拉起 `AudioBridgeService`。
 4. Service 初始化通知通道、音量仓库、协议读取器、播放管理器。
-5. Service 在后台监听 `5000` 端口，等待 Windows 接入。
+5. Service 作为客户端主动连接 Windows 服务器（优先已保存的局域网目标，否则 USB reverse `127.0.0.1:5000`），断线自动重连。
 
 对应入口代码：
 
@@ -242,7 +242,7 @@ Compose UI
 
 限制：
 
-- `AudioBridgeService` 目前职责偏多，集成了监听、连接管理、协议调度、命令发送、状态更新
+- `AudioBridgeService` 目前职责偏多，集成了连接 / 重连、协议调度、命令发送、状态更新
 - `PlaybackStateRepository` 是全局单例，方便但测试隔离一般
 - ViewModel 目前较薄，领域逻辑大多仍在 Service / Repository
 - 尚未引入依赖注入框架，模块替换需要手动 new / 手动接线

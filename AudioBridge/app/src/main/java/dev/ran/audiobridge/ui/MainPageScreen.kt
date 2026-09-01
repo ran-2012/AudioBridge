@@ -17,10 +17,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -30,7 +26,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.Color
@@ -44,8 +39,6 @@ import dev.ran.audiobridge.model.WindowsAppVolumeSession
 internal fun MainPageScreen(
     uiState: PlaybackUiState,
     contentPadding: PaddingValues,
-    onConnectUsb: () -> Unit,
-    onConnectLanServer: (String, Int) -> Unit,
     onVolumeChanged: (Float) -> Unit,
     onPlaybackCacheChanged: (Int) -> Unit,
     onRequestWindowsVolumeSnapshot: () -> Unit,
@@ -61,8 +54,6 @@ internal fun MainPageScreen(
         TabletLandscapeMainPage(
             uiState = uiState,
             contentPadding = contentPadding,
-            onConnectUsb = onConnectUsb,
-            onConnectLanServer = onConnectLanServer,
             onVolumeChanged = onVolumeChanged,
             onPlaybackCacheChanged = onPlaybackCacheChanged,
             onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
@@ -75,8 +66,6 @@ internal fun MainPageScreen(
         PhoneMainPage(
             uiState = uiState,
             contentPadding = contentPadding,
-            onConnectUsb = onConnectUsb,
-            onConnectLanServer = onConnectLanServer,
             onVolumeChanged = onVolumeChanged,
             onPlaybackCacheChanged = onPlaybackCacheChanged,
             onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
@@ -92,8 +81,6 @@ internal fun MainPageScreen(
 private fun PhoneMainPage(
     uiState: PlaybackUiState,
     contentPadding: PaddingValues,
-    onConnectUsb: () -> Unit,
-    onConnectLanServer: (String, Int) -> Unit,
     onVolumeChanged: (Float) -> Unit,
     onPlaybackCacheChanged: (Int) -> Unit,
     onRequestWindowsVolumeSnapshot: () -> Unit,
@@ -111,11 +98,6 @@ private fun PhoneMainPage(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         RunningStatusCard(uiState = uiState)
-        LanServerCard(
-            uiState = uiState,
-            onConnectUsb = onConnectUsb,
-            onConnectLanServer = onConnectLanServer,
-        )
         PlaybackVolumeCard(uiState = uiState, onVolumeChanged = onVolumeChanged, onPlaybackCacheChanged = onPlaybackCacheChanged)
         PhoneWindowsVolumeControlCard(
             uiState = uiState,
@@ -262,8 +244,6 @@ private fun PhoneWindowsSessionCard(
 private fun TabletLandscapeMainPage(
     uiState: PlaybackUiState,
     contentPadding: PaddingValues,
-    onConnectUsb: () -> Unit,
-    onConnectLanServer: (String, Int) -> Unit,
     onVolumeChanged: (Float) -> Unit,
     onPlaybackCacheChanged: (Int) -> Unit,
     onRequestWindowsVolumeSnapshot: () -> Unit,
@@ -279,11 +259,6 @@ private fun TabletLandscapeMainPage(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        LanServerCard(
-            uiState = uiState,
-            onConnectUsb = onConnectUsb,
-            onConnectLanServer = onConnectLanServer,
-        )
         TabletMasterVolumeCard(
             uiState = uiState,
             onVolumeChanged = onVolumeChanged,
@@ -570,78 +545,6 @@ private fun TabletWindowsSessionCard(
             }
             OutlinedButton(onClick = onToggleMute) {
                 Text(if (session.isMuted) "取消静音" else "静音")
-            }
-        }
-    }
-}
-
-@Composable
-internal fun LanServerCard(
-    uiState: PlaybackUiState,
-    onConnectUsb: () -> Unit,
-    onConnectLanServer: (String, Int) -> Unit,
-) {
-    var manualHost by rememberSaveable { mutableStateOf("") }
-    var manualPort by rememberSaveable { mutableStateOf("6000") }
-
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text("连接方式", style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = onConnectUsb) { Text("USB 连接") }
-            }
-
-            Text("自动发现的局域网服务器：", style = MaterialTheme.typography.titleSmall)
-            if (uiState.lanServers.isEmpty()) {
-                Text("未发现服务器（请确认 Windows 端已启用局域网模式）", style = MaterialTheme.typography.bodySmall)
-            } else {
-                uiState.lanServers.forEach { server ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column {
-                            Text(server.name, style = MaterialTheme.typography.bodyLarge)
-                            Text("${server.host}:${server.port}", style = MaterialTheme.typography.bodySmall)
-                        }
-                        OutlinedButton(onClick = { onConnectLanServer(server.host, server.port) }) {
-                            Text("连接")
-                        }
-                    }
-                }
-            }
-
-            Text("手动连接（回退）：", style = MaterialTheme.typography.titleSmall)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OutlinedTextField(
-                    value = manualHost,
-                    onValueChange = { manualHost = it },
-                    placeholder = { Text("IP 地址") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedTextField(
-                    value = manualPort,
-                    onValueChange = { manualPort = it.filter { c -> c.isDigit() }.take(5) },
-                    placeholder = { Text("端口") },
-                    singleLine = true,
-                    modifier = Modifier.width(96.dp),
-                )
-                FilledTonalButton(
-                    onClick = {
-                        val port = manualPort.toIntOrNull()
-                        if (manualHost.isNotBlank() && port != null) {
-                            onConnectLanServer(manualHost.trim(), port)
-                        }
-                    },
-                ) { Text("连接") }
             }
         }
     }

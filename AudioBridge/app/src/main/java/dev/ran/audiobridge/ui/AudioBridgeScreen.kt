@@ -68,7 +68,7 @@ fun AudioBridgeScreen(
     uiState: PlaybackUiState,
     onStartService: () -> Unit,
     onStopService: () -> Unit,
-    onRestartService: () -> Unit,
+    onReconnect: () -> Unit,
     onConnectUsb: () -> Unit,
     onConnectLanServer: (String, Int) -> Unit,
     onVolumeChanged: (Float) -> Unit,
@@ -95,17 +95,15 @@ fun AudioBridgeScreen(
     Scaffold(
         topBar = {
             if (page == AudioBridgePage.Main) {
-                val runningStatus = remember(uiState) { buildRunningStatusUi(uiState) }
-
                 TopAppBar(
                     title = { Text("AudioBridge") },
                     actions = {
-                        StatusBadgeCompact(status = runningStatus)
+                        ConnectStatusBadge(uiState = uiState)
                         Spacer(modifier = Modifier.width(8.dp))
-                        IconButton(onClick = onRestartService) {
+                        IconButton(onClick = onReconnect) {
                             Icon(
                                 imageVector = Icons.Filled.Refresh,
-                                contentDescription = "重启后台服务",
+                                contentDescription = "重连",
                             )
                         }
                         IconButton(onClick = { currentPage = AudioBridgePage.Details.name }) {
@@ -135,8 +133,6 @@ fun AudioBridgeScreen(
             AudioBridgePage.Main -> MainPageScreen(
                 uiState = uiState,
                 contentPadding = innerPadding,
-                onConnectUsb = onConnectUsb,
-                onConnectLanServer = onConnectLanServer,
                 onVolumeChanged = onVolumeChanged,
                 onPlaybackCacheChanged = onPlaybackCacheChanged,
                 onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
@@ -151,6 +147,8 @@ fun AudioBridgeScreen(
                 contentPadding = innerPadding,
                 onStartService = onStartService,
                 onStopService = onStopService,
+                onConnectUsb = onConnectUsb,
+                onConnectLanServer = onConnectLanServer,
                 onApplyScreenOffPlaybackCachePreset = onApplyScreenOffPlaybackCachePreset,
                 onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
                 onHideWindowsApp = onHideWindowsApp,
@@ -195,11 +193,17 @@ internal fun RunningStatusCard(uiState: PlaybackUiState) {
 }
 
 @Composable
-private fun StatusBadgeCompact(status: RunningStatusUi) {
+private fun ConnectStatusBadge(uiState: PlaybackUiState) {
+    val (color, label) = when {
+        uiState.isConnected -> Color(0xFF1B8A5A) to "已连接"
+        uiState.serviceRunning -> Color(0xFFD06A00) to "连接中"
+        else -> Color(0xFF9E9E9E) to "未连接"
+    }
+
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(status.color.copy(alpha = 0.16f))
+            .background(color.copy(alpha = 0.16f))
             .padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -208,10 +212,10 @@ private fun StatusBadgeCompact(status: RunningStatusUi) {
             modifier = Modifier
                 .size(10.dp)
                 .clip(CircleShape)
-                .background(status.color),
+                .background(color),
         )
         Text(
-            text = status.label,
+            text = label,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )

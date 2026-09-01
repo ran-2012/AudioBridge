@@ -229,7 +229,8 @@ class AudioBridgeService : Service() {
     }
 
     /**
-     * 客户端连接主循环：主动连接 Windows 服务器，断线后按固定间隔自动重连。
+     * 客户端连接主循环：主动连接 Windows 服务器，断线/失败后按固定间隔自动重连，
+     * 不计代价保证连接稳定性（任何异常都不退出循环，直到用户显式停止服务）。
      */
     private suspend fun connectLoop(explicitHost: String?, explicitPort: Int) {
         var attempt = 0
@@ -237,59 +238,64 @@ class AudioBridgeService : Service() {
 
         while (currentCoroutineContext().isActive) {
             attempt++
-            val target = resolveConnectTarget(explicitHost, explicitPort)
-            if (lastTarget != target) {
-                lastTarget = target
-                PlaybackStateRepository.updateConnectTarget(target.first, target.second)
-                PlaybackStateRepository.appendLog("Network: 连接目标 ${target.first}:${target.second}")
-            }
-
-            val (connectHost, connectPort) = target
-            PlaybackStateRepository.appendLog("Network: 尝试连接 $connectHost:$connectPort（第 $attempt 次）")
-
-            runCatching {
-                val socket = Socket()
-                socket.tcpNoDelay = true
-                socket.connect(InetSocketAddress(connectHost, connectPort), CONNECT_TIMEOUT_MILLIS)
-                activeSocket = socket
-                synchronized(outputLock) {
-                    activeClientOutputStream = socket.getOutputStream()
+            try {
+                val target = resolveConnectTarget(explicitHost, explicitPort)
+                if (lastTarget != target) {
+                    lastTarget = target
+                    PlaybackStateRepository.updateConnectTarget(target.first, target.second)
+                    PlaybackStateRepository.appendLog("Network: 连接目标 ${target.first}:${target.second}")
                 }
-                playbackStatusSequence = 0u
-                lastAudioSequence = 0u
-                lastAudioFrameElapsedRealtime = 0L
-                lastPacketElapsedRealtime = SystemClock.elapsedRealtime()
 
-                PlaybackStateRepository.updateConnection(true, "已连接 Windows $connectHost:$connectPort，等待初始化消息")
-                PlaybackStateRepository.appendLog("Network: 已连接 $connectHost:$connectPort")
-                notificationController.ensureChannel()
-                startForeground(
-                    NotificationController.NOTIFICATION_ID,
-                    notificationController.build("已连接 Windows，正在接收音频"),
-                )
+                val (connectHost, connectPort) = target
+                PlaybackStateRepository.appendLog("Network: 尝试连接 $connectHost:$connectPort（第 $attempt 次）")
 
-                playbackStatusJob = startPlaybackStatusLoop()
                 runCatching {
-                    handleClient(socket)
-                }.onFailure { throwable ->
-                    PlaybackStateRepository.appendLog("Network: 连接中断 ${throwable.message ?: "未知错误"}")
-                    PlaybackStateRepository.updateError("连接中断：${throwable.message ?: "未知错误"}")
-                }
-                playbackStatusJob?.cancel()
-                playbackStatusJob = null
-                synchronized(outputLock) {
-                    activeClientOutputStream = null
-                }
-                runCatching { socket.close() }
-                activeSocket = null
+                    val socket = Socket()
+                    socket.tcpNoDelay = true
+                    socket.connect(InetSocketAddress(connectHost, connectPort), CONNECT_TIMEOUT_MILLIS)
+                    activeSocket = socket
+                    synchronized(outputLock) {
+                        activeClientOutputStream = socket.getOutputStream()
+                    }
+                    playbackStatusSequence = 0u
+                    lastAudioSequence = 0u
+                    lastAudioFrameElapsedRealtime = 0L
+                    lastPacketElapsedRealtime = SystemClock.elapsedRealtime()
 
-                PlaybackStateRepository.appendLog("Network: 当前连接已关闭，释放 AudioTrack")
-                PlaybackStateRepository.updateConnection(false, "连接已断开，准备自动重连")
-                PlaybackStateRepository.updatePlayback(false, "播放已停止，准备自动重连")
-                playbackManager.release()
-            }.onFailure { throwable ->
-                PlaybackStateRepository.appendLog("Network: 连接失败 ${throwable.message ?: "未知错误"}")
-                PlaybackStateRepository.updateConnection(false, "连接失败，准备自动重连")
+                    PlaybackStateRepository.updateConnection(true, "已连接 Windows $connectHost:$connectPort，等待初始化消息")
+                    PlaybackStateRepository.appendLog("Network: 已连接 $connectHost:$connectPort")
+                    notificationController.ensureChannel()
+                    startForeground(
+                        NotificationController.NOTIFICATION_ID,
+                        notificationController.build("已连接 Windows，正在接收音频"),
+                    )
+
+                    playbackStatusJob = startPlaybackStatusLoop()
+                    runCatching {
+                        handleClient(socket)
+                    }.onFailure { throwable ->
+                        PlaybackStateRepository.appendLog("Network: 连接中断 ${throwable.message ?: "未知错误"}，准备自动重连")
+                        PlaybackStateRepository.updateError("连接中断：${throwable.message ?: "未知错误"}，正在自动重连")
+                    }
+                    playbackStatusJob?.cancel()
+                    playbackStatusJob = null
+                    synchronized(outputLock) {
+                        activeClientOutputStream = null
+                    }
+                    runCatching { socket.close() }
+                    activeSocket = null
+
+                    PlaybackStateRepository.appendLog("Network: 当前连接已关闭，释放 AudioTrack")
+                    PlaybackStateRepository.updateConnection(false, "连接已断开，正在自动重连（第 $attempt 次）")
+                    PlaybackStateRepository.updatePlayback(false, "播放已停止，正在自动重连")
+                    playbackManager.release()
+                }.onFailure { throwable ->
+                    PlaybackStateRepository.appendLog("Network: 连接失败 ${throwable.message ?: "未知错误"}（第 $attempt 次，将自动重连）")
+                    PlaybackStateRepository.updateConnection(false, "连接失败，正在自动重连（第 $attempt 次）")
+                    playbackManager.release()
+                }
+            } catch (throwable: Throwable) {
+                PlaybackStateRepository.appendLog("Network: 重连循环异常 ${throwable.message ?: "未知错误"}，将继续自动重试")
                 playbackManager.release()
             }
 

@@ -50,6 +50,10 @@ object PlaybackStateRepository {
         mutableState.value = mutableState.value.copy(lanServers = servers)
     }
 
+    fun updateSavedLanTarget(host: String, port: String) {
+        mutableState.value = mutableState.value.copy(savedLanHost = host, savedLanPort = port)
+    }
+
     fun updatePlayback(isPlaying: Boolean, statusMessage: String) {
         mutableState.value = mutableState.value.copy(
             isPlaying = isPlaying,

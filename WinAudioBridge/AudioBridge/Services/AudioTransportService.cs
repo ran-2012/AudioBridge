@@ -17,6 +17,8 @@ public sealed class AudioTransportService : IAsyncDisposable
     private TcpClient? _client;
     private NetworkStream? _stream;
     private TcpListener? _listener;
+    private TcpListener? _secondaryListener;
+    private CancellationTokenSource? _pendingAcceptCts;
     private CancellationTokenSource? _receiveLoopCancellationTokenSource;
     private Task? _receiveLoopTask;
     private uint _sentFrameCount;
@@ -29,7 +31,7 @@ public sealed class AudioTransportService : IAsyncDisposable
 
     public bool IsConnected => _client?.Connected == true && _stream is not null;
 
-    public bool IsListening => _listener is not null;
+    public bool IsListening => _listener is not null || _secondaryListener is not null;
 
     public event EventHandler<TransportMessageReceivedEventArgs>? MessageReceived;
 
@@ -40,18 +42,26 @@ public sealed class AudioTransportService : IAsyncDisposable
 
     /// <summary>
     /// 以服务器身份开始监听指定地址与端口，等待 Android 客户端接入。
+    /// 可指定一个辅助端口：主、辅任一端口接入都会建立连接（用于同时覆盖 ADB reverse 与局域网直连）。
     /// </summary>
-    public async Task StartListeningAsync(string host, int port, CancellationToken cancellationToken = default)
+    public async Task StartListeningAsync(string host, int port, int? secondaryPort = null, CancellationToken cancellationToken = default)
     {
         await StopListeningAsync();
 
         _listener = new TcpListener(IPAddress.Parse(host), port);
         _listener.Start();
         _logService.Info("Transport", $"服务器已开始监听 {host}:{port}，等待客户端接入。");
+
+        if (secondaryPort is { } secondary && secondary != port)
+        {
+            _secondaryListener = new TcpListener(IPAddress.Parse(host), secondary);
+            _secondaryListener.Start();
+            _logService.Info("Transport", $"服务器已开始辅助监听 {host}:{secondary}，任一端口接入均可建立连接。");
+        }
     }
 
     /// <summary>
-    /// 接受一个客户端连接并启动接收循环（服务器模式）。
+    /// 接受一个客户端连接并启动接收循环（服务器模式）。主、辅监听器任一有连接即接受。
     /// </summary>
     public async Task AcceptClientAsync(CancellationToken cancellationToken = default)
     {
@@ -62,7 +72,34 @@ public sealed class AudioTransportService : IAsyncDisposable
 
         await DisconnectAsync();
 
-        var client = await _listener.AcceptTcpClientAsync(cancellationToken);
+        _pendingAcceptCts?.Cancel();
+        _pendingAcceptCts?.Dispose();
+        _pendingAcceptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var acceptToken = _pendingAcceptCts.Token;
+
+        var listeners = new List<TcpListener> { _listener };
+        if (_secondaryListener is not null)
+        {
+            listeners.Add(_secondaryListener);
+        }
+
+        var acceptTasks = listeners.Select(listener => listener.AcceptTcpClientAsync(acceptToken).AsTask()).ToArray();
+        var completedTask = await Task.WhenAny(acceptTasks);
+
+        // 观察其余 accept 任务，避免未观察异常。
+        foreach (var task in acceptTasks)
+        {
+            if (!ReferenceEquals(task, completedTask))
+            {
+                _ = ObserveAcceptTask(task);
+            }
+        }
+
+        var client = await completedTask;
+        _pendingAcceptCts.Cancel();
+        _pendingAcceptCts.Dispose();
+        _pendingAcceptCts = null;
+
         _client = client;
         _stream = client.GetStream();
         _sentFrameCount = 0;
@@ -72,16 +109,42 @@ public sealed class AudioTransportService : IAsyncDisposable
         _logService.Info("Transport", $"已接受客户端连接：{client.Client.RemoteEndPoint}。");
     }
 
+    private static async Task ObserveAcceptTask(Task<TcpClient> task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // 取消的 accept 属于正常竞争失败
+        }
+        catch (SocketException)
+        {
+            // 监听器已停止等场景
+        }
+    }
+
     /// <summary>
     /// 停止监听（不影响已建立的客户端连接）。
     /// </summary>
     public Task StopListeningAsync()
     {
+        _pendingAcceptCts?.Cancel();
+        _pendingAcceptCts?.Dispose();
+        _pendingAcceptCts = null;
+
         if (_listener is not null)
         {
             _logService.Info("Transport", "服务器停止监听。");
             _listener.Stop();
             _listener = null;
+        }
+
+        if (_secondaryListener is not null)
+        {
+            _secondaryListener.Stop();
+            _secondaryListener = null;
         }
 
         return Task.CompletedTask;

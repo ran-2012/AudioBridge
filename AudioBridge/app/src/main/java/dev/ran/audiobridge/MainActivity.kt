@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
                     uiState = uiState,
                     onStartService = viewModel::startService,
                     onStopService = viewModel::stopService,
-                    onRestartService = viewModel::restartService,
+                    onReconnect = viewModel::reconnect,
                     onConnectUsb = viewModel::connectUsb,
                     onConnectLanServer = viewModel::connectLanServer,
                     onVolumeChanged = viewModel::updateVolume,

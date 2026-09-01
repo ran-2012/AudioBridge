@@ -29,7 +29,7 @@
 
 整体链路（**统一拓扑：Windows 作 TCP 服务器，Android 作 TCP 客户端**）如下：
 
-1. Windows 端启动 TCP 服务器监听端口（ADB 模式监听 `127.0.0.1:5000`；LAN 模式监听 `0.0.0.0:6000`）
+1. Windows 端启动 TCP 服务器监听端口（**同时监听 `0.0.0.0:5000` 与 `0.0.0.0:<LanListenPort>`，与连接模式无关**，任一端口接入即建立连接）
 2. ADB 模式下 Windows 端执行 `adb reverse`，将设备端口转发到本机；LAN 模式下 Android 端通过发现或手动输入获得 Windows 地址
 3. Android 端作为 TCP 客户端主动连接 Windows
 4. 连接成功后 Windows 端发送会话初始化信息
@@ -48,8 +48,9 @@
 
 推荐端口：
 
-- ADB 模式：Windows 监听 `5000`，`adb reverse tcp:5000 tcp:5000`
-- LAN 模式：Windows 监听 `6000`，Android 经 Wi-Fi 连接 `WindowsIP:6000`
+- 无论 ADB / LAN 模式，Windows 均同时监听 `0.0.0.0:5000` 与 `0.0.0.0:<LanListenPort>`（默认 `6000`）
+- ADB 模式：额外执行 `adb reverse tcp:5000 tcp:5000`，Android 经 USB 连接设备本地 `5000`
+- LAN 模式：Android 经 Wi-Fi 连接 `WindowsIP:6000`（发现或手动输入）
 - 发现端口（UDP）：`9000`
 
 ADB reverse 命令（ADB 模式）：
@@ -72,18 +73,20 @@ ADB 模式：
 1. 检查 `adb.exe` 是否存在
 2. 执行 `adb devices` 并选择目标设备
 3. 执行 `adb reverse tcp:5000 tcp:5000`
-4. 启动 TCP 服务器监听 `127.0.0.1:5000`
+4. 启动 TCP 服务器监听 `0.0.0.0:5000` 与 `0.0.0.0:<LanListenPort>`
 5. 等待 Android 客户端接入
 6. 客户端接入后发送会话头
 7. 启动音频采集并发送音频帧
 
 LAN 模式：
 
-1. 启动 TCP 服务器监听 `0.0.0.0:6000`
+1. 启动 TCP 服务器监听 `0.0.0.0:5000` 与 `0.0.0.0:<LanListenPort>`
 2. 启动 UDP 发现应答服务（端口 `9000`，响应 Android 探测广播）
 3. 等待 Android 客户端接入
 4. 客户端接入后发送会话头
 5. 启动音频采集并发送音频帧
+
+说明：无论 ADB / LAN 模式，Windows 均同时监听 `5000` 与 `<LanListenPort>` 两个端口，Android 无论经 USB reverse、局域网发现还是手动输入均可接入；断开后服务器自动恢复监听等待新接入（单活跃客户端，新连接替换旧连接）。
 
 ### 3.2 Android 端流程
 
@@ -702,21 +705,21 @@ Android 端建议：
 
 ### Windows 端
 
-- 支持执行 `adb forward`
-- 支持建立 TCP Client
+- 支持执行 `adb reverse`
+- 支持建立 TCP Server（监听 `5000` 与 `<LanListenPort>`）
 - 支持发送 `SessionInit`
 - 支持发送 `PCM16` 音频帧
 
 ### Android 端
 
-- 支持 `ServerSocket(5000)`
+- 支持 TCP Client 主动连接（USB reverse / 局域网发现 / 手动输入）
 - 支持解析 `SessionInit`
 - 支持解析 `AudioFrame`
 - 支持 `AudioTrack` 播放 `PCM16 / 48000 / Stereo`
 
 ### 联调验收标准
 
-- Windows 成功连接 Android
+- Android 成功连接 Windows 并建立会话
 - Android 成功收到并解析会话头
 - Android 成功播放来自 Windows 的系统音频
 - 连续播放 `30` 分钟无明显断流

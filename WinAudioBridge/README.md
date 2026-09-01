@@ -129,13 +129,13 @@ Windows 主工程路径：
 
 - 根据配置生成 `StreamingSessionOptions`
 - 查询 Android 设备并选择目标设备
-- 建立 ADB 端口转发
-- 建立本地 `127.0.0.1:5000` TCP 连接
+- 建立 ADB reverse 转发
+- 作为 TCP 服务器监听（`5000` 与 `<LanListenPort>` 双端口）等待 Android 客户端接入
 - 发送 `SessionInit`
 - 发送初始 Windows 音量目录快照
 - 接收采集到的音频帧并转发
 - 处理 Android 发来的音量控制命令
-- 在链路异常时触发自动重连
+- 断开后自动恢复监听等待接入 / 按自动重连策略处理
 - 维护 `StreamingStatusSnapshot`
 
 ### 为什么它重要
@@ -163,7 +163,7 @@ Windows 主工程路径：
 - 启动 ADB Server
 - 枚举已连接设备
 - 判断目标 Android 包是否正在运行
-- 建立端口转发 `tcp:5000 -> tcp:5000`
+- 建立 reverse 转发 `tcp:5000 -> tcp:5000`（`adb reverse`）
 
 它不负责：
 

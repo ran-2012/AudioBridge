@@ -9,6 +9,8 @@ import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ran.audiobridge.audio.PlaybackCacheConfig
+import dev.ran.audiobridge.data.ConnectionPreferencesRepository
+import dev.ran.audiobridge.data.SavedLanTarget
 import dev.ran.audiobridge.data.VolumePreferencesRepository
 import dev.ran.audiobridge.model.HiddenWindowsAppSupport
 import dev.ran.audiobridge.model.WindowsAppVolumeSession
@@ -16,14 +18,17 @@ import dev.ran.audiobridge.network.LanDiscoveryClient
 import dev.ran.audiobridge.repository.PlaybackStateRepository
 import dev.ran.audiobridge.service.AudioBridgeService
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val volumePreferencesRepository = VolumePreferencesRepository(application)
+    private val connectionPreferencesRepository = ConnectionPreferencesRepository(application)
     private val lanDiscoveryClient = LanDiscoveryClient()
     private var hasAutoStartedService = false
+    private var lastSavedLanTarget: SavedLanTarget? = null
 
     val uiState = PlaybackStateRepository.state.stateIn(
         scope = viewModelScope,
@@ -33,6 +38,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshBatteryOptimizationState()
+
+        viewModelScope.launch {
+            connectionPreferencesRepository.savedLanTargetFlow.collect { target ->
+                lastSavedLanTarget = target
+                PlaybackStateRepository.updateSavedLanTarget(
+                    host = target?.host.orEmpty(),
+                    port = target?.port?.toString().orEmpty(),
+                )
+            }
+        }
 
         viewModelScope.launch {
             lanDiscoveryClient.startScanning()
@@ -86,19 +101,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startService() {
         val context = getApplication<Application>()
         PlaybackStateRepository.appendLog("UI: 用户请求启动后台播放")
-        context.startForegroundService(AudioBridgeService.createStartIntent(context))
+        viewModelScope.launch {
+            context.startForegroundService(resolveStartIntent(context))
+        }
     }
 
-    /** 连接 USB（adb reverse）模式的本机 reverse 端口。 */
+    /** 解析启动服务时的连接目标：有保存的局域网目标则连它，否则回退 USB reverse。 */
+    private suspend fun resolveStartIntent(context: Application): Intent {
+        val saved = connectionPreferencesRepository.savedLanTargetFlow.first()
+        return if (saved != null) {
+            PlaybackStateRepository.appendLog("UI: 将连接保存的局域网服务器 ${saved.host}:${saved.port}")
+            AudioBridgeService.createConnectIntent(context, saved.host, saved.port)
+        } else {
+            AudioBridgeService.createStartIntent(context)
+        }
+    }
+
+    /** 连接 USB（adb reverse）模式的本机 reverse 端口（不改变已保存的局域网配置）。 */
     fun connectUsb() {
         val context = getApplication<Application>()
         PlaybackStateRepository.appendLog("UI: 用户选择 USB 连接（reverse 端口）")
         context.startForegroundService(AudioBridgeService.createStartIntent(context))
     }
 
-    /** 连接指定的局域网 Windows 服务器。 */
+    /** 连接指定的局域网 Windows 服务器，并保存该配置以便下次自动使用。 */
     fun connectLanServer(host: String, port: Int) {
         val context = getApplication<Application>()
+        viewModelScope.launch {
+            connectionPreferencesRepository.saveLanTarget(host, port)
+        }
         PlaybackStateRepository.appendLog("UI: 用户选择局域网服务器 $host:$port")
         context.startForegroundService(AudioBridgeService.createConnectIntent(context, host, port))
     }
@@ -111,7 +142,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         hasAutoStartedService = true
         val context = getApplication<Application>()
         PlaybackStateRepository.appendLog("UI: 应用启动，自动拉起后台播放服务")
-        context.startForegroundService(AudioBridgeService.createStartIntent(context))
+        viewModelScope.launch {
+            context.startForegroundService(resolveStartIntent(context))
+        }
     }
 
     fun refreshBatteryOptimizationState() {
@@ -176,6 +209,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         PlaybackStateRepository.appendLog("UI: 用户请求重启后台播放")
         context.startService(AudioBridgeService.createRestartIntent(context))
+    }
+
+    fun reconnect() {
+        val context = getApplication<Application>()
+        PlaybackStateRepository.appendLog("UI: 用户请求重新连接 Windows")
+        viewModelScope.launch {
+            val saved = connectionPreferencesRepository.savedLanTargetFlow.first()
+            if (saved != null) {
+                PlaybackStateRepository.appendLog("UI: 重新连接保存的局域网服务器 ${saved.host}:${saved.port}")
+                context.startService(AudioBridgeService.createConnectIntent(context, saved.host, saved.port))
+            } else {
+                context.startService(AudioBridgeService.createRestartIntent(context))
+            }
+        }
     }
 
     fun updateVolume(volume: Float) {

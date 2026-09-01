@@ -89,13 +89,14 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         try
         {
             var options = BuildOptions();
+            var lanPort = _settingsService.Current.LanListenPort;
 
             if (IsLanMode(options.ConnectionMode))
             {
-                _logService.Info("Coordinator", $"开始准备 LAN 链路：监听 0.0.0.0:{options.LocalPort}。");
-                UpdateStatus(StreamingState.Preparing, $"正在启动局域网服务器监听 :{options.LocalPort}...", null, null);
-                await _audioTransportService.StartListeningAsync("0.0.0.0", options.LocalPort, cancellationToken);
-                UpdateStatus(StreamingState.Ready, $"局域网服务器已就绪，监听 0.0.0.0:{options.LocalPort}，等待 Android 客户端接入。", null, null);
+                _logService.Info("Coordinator", $"开始准备 LAN 链路：监听 0.0.0.0:5000 与 :{lanPort}。");
+                UpdateStatus(StreamingState.Preparing, "正在启动局域网服务器监听...", null, null);
+                await _audioTransportService.StartListeningAsync("0.0.0.0", 5000, lanPort, cancellationToken);
+                UpdateStatus(StreamingState.Ready, $"局域网服务器已就绪，监听 0.0.0.0:5000 与 :{lanPort}，等待 Android 客户端接入。", null, null);
                 return;
             }
 
@@ -130,8 +131,8 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
                 return;
             }
 
-            await _audioTransportService.StartListeningAsync("127.0.0.1", options.LocalPort, cancellationToken);
-            UpdateStatus(StreamingState.Ready, $"{reverseResult.StatusMessage} 服务器监听 127.0.0.1:{options.LocalPort}，等待 Android 客户端接入。", targetDevice.Serial, targetDevice.Model);
+            await _audioTransportService.StartListeningAsync("0.0.0.0", options.LocalPort, lanPort, cancellationToken);
+            UpdateStatus(StreamingState.Ready, $"{reverseResult.StatusMessage} 服务器监听 0.0.0.0:{options.LocalPort} 与 :{lanPort}，等待 Android 客户端接入。", targetDevice.Serial, targetDevice.Model);
         }
         catch (OperationCanceledException)
         {

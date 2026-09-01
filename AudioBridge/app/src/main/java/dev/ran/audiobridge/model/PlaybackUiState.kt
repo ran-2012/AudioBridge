@@ -10,6 +10,8 @@ data class PlaybackUiState(
     val connectTarget: String? = null,
     val rttMillis: Long? = null,
     val lanServers: List<LanServerInfo> = emptyList(),
+    val savedLanHost: String = "",
+    val savedLanPort: String = "",
     val isIgnoringBatteryOptimizations: Boolean? = null,
     val batteryOptimizationStatusMessage: String = "正在检查锁屏后台限制...",
     val volume: Float = 1.0f,
