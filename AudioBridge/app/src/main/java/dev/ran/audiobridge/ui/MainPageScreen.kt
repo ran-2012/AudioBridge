@@ -1,6 +1,7 @@
 package dev.ran.audiobridge.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,12 +11,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,10 +31,16 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
@@ -93,12 +107,10 @@ private fun PhoneMainPage(
         modifier = Modifier
             .fillMaxSize()
             .padding(contentPadding)
-            .padding(16.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        RunningStatusCard(uiState = uiState)
-        PlaybackVolumeCard(uiState = uiState, onVolumeChanged = onVolumeChanged, onPlaybackCacheChanged = onPlaybackCacheChanged)
         PhoneWindowsVolumeControlCard(
             uiState = uiState,
             onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
@@ -107,6 +119,8 @@ private fun PhoneMainPage(
             onWindowsSessionVolumeChanged = onWindowsSessionVolumeChanged,
             onWindowsSessionMuteChanged = onWindowsSessionMuteChanged,
         )
+        RunningStatusCard(uiState = uiState)
+        PlaybackVolumeCard(uiState = uiState, onVolumeChanged = onVolumeChanged, onPlaybackCacheChanged = onPlaybackCacheChanged)
     }
 }
 
@@ -124,62 +138,26 @@ private fun PhoneWindowsVolumeControlCard(
         hiddenProcessNames = uiState.hiddenProcessNames,
     )
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        WindowsMasterVolumeCard(
+            uiState = uiState,
+            onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
+            onWindowsMasterVolumeChanged = onWindowsMasterVolumeChanged,
+            onWindowsMasterMuteChanged = onWindowsMasterMuteChanged,
+        )
+        SessionsHeader(sessionCount = visibleSessions.size, onRefresh = onRequestWindowsVolumeSnapshot)
+        SessionsState(
+            uiState = uiState,
+            visibleSessions = visibleSessions,
+            onRefresh = onRequestWindowsVolumeSnapshot,
         ) {
-            Text("Windows 音量控制", style = MaterialTheme.typography.titleMedium)
-            Text("状态：${uiState.windowsVolumeStatusMessage}")
-            Text("最近同步：${formatTimestamp(uiState.windowsVolumeCatalog.capturedAtMillis)}")
-            uiState.windowsVolumeErrorMessage?.takeIf { it.isNotBlank() }?.let { error ->
-                Text(text = error, color = MaterialTheme.colorScheme.error)
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilledTonalButton(
-                    onClick = onRequestWindowsVolumeSnapshot,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(if (uiState.windowsVolumeLoading) "同步中..." else "刷新")
-                }
-                OutlinedButton(
-                    onClick = { onWindowsMasterMuteChanged(!uiState.windowsVolumeCatalog.masterVolume.isMuted) },
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(if (uiState.windowsVolumeCatalog.masterVolume.isMuted) "取消静音" else "静音")
-                }
-            }
-
-            Text("设备：${uiState.windowsVolumeCatalog.masterVolume.deviceName}")
-            Text("主音量：${(uiState.windowsVolumeCatalog.masterVolume.volume * 100).toInt()}% / ${if (uiState.windowsVolumeCatalog.masterVolume.isMuted) "静音" else "未静音"}")
-            Slider(
-                value = uiState.windowsVolumeCatalog.masterVolume.volume,
-                onValueChange = onWindowsMasterVolumeChanged,
-                valueRange = 0f..1f,
-            )
-
-            Text(
-                text = "应用音频 · ${visibleSessions.size} 个",
-                style = MaterialTheme.typography.titleSmall,
-            )
-
-            if (visibleSessions.isEmpty()) {
-                Text("当前还没有可展示的 Windows 应用音量会话。")
-            } else {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    visibleSessions.forEach { session ->
-                        PhoneWindowsSessionCard(
-                            session = session,
-                            onVolumeChanged = { volume -> onWindowsSessionVolumeChanged(session.sessionId, volume) },
-                            onToggleMute = { onWindowsSessionMuteChanged(session.sessionId, !session.isMuted) },
-                        )
-                    }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                visibleSessions.forEach { session ->
+                    CompactWindowsSessionCard(
+                        session = session,
+                        onVolumeChanged = { volume -> onWindowsSessionVolumeChanged(session.sessionId, volume) },
+                        onToggleMute = { onWindowsSessionMuteChanged(session.sessionId, !session.isMuted) },
+                    )
                 }
             }
         }
@@ -187,17 +165,20 @@ private fun PhoneWindowsVolumeControlCard(
 }
 
 @Composable
-private fun PhoneWindowsSessionCard(
+private fun CompactWindowsSessionCard(
     session: WindowsAppVolumeSession,
     onVolumeChanged: (Float) -> Unit,
     onToggleMute: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f)),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -218,23 +199,39 @@ private fun PhoneWindowsSessionCard(
                     Text(
                         text = session.processName.ifBlank { "unknown" },
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                Text(
+                    text = "${(session.volume * 100).toInt()}%",
+                    style = MaterialTheme.typography.titleMedium,
+                )
             }
-
-            Text("音量：${(session.volume * 100).toInt()}%")
-            Slider(
-                value = session.volume,
-                onValueChange = onVolumeChanged,
-                valueRange = 0f..1f,
-            )
-            OutlinedButton(
-                onClick = onToggleMute,
+            Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(if (session.isMuted) "取消静音" else "静音")
+                Slider(
+                    value = session.volume,
+                    onValueChange = onVolumeChanged,
+                    valueRange = 0f..1f,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedIconButton(
+                    onClick = onToggleMute,
+                    modifier = Modifier.size(44.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Icon(
+                        imageVector = if (session.isMuted) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                        contentDescription = if (session.isMuted) "取消 ${session.displayName} 静音" else "将 ${session.displayName} 静音",
+                        tint = if (session.isMuted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
         }
     }
@@ -252,24 +249,34 @@ private fun TabletLandscapeMainPage(
     onWindowsSessionVolumeChanged: (String, Float) -> Unit,
     onWindowsSessionMuteChanged: (String, Boolean) -> Unit,
 ) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxSize()
             .padding(contentPadding)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        TabletMasterVolumeCard(
-            uiState = uiState,
-            onVolumeChanged = onVolumeChanged,
-            onPlaybackCacheChanged = onPlaybackCacheChanged,
-            onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
-            onWindowsMasterVolumeChanged = onWindowsMasterVolumeChanged,
-            onWindowsMasterMuteChanged = onWindowsMasterMuteChanged,
-        )
+        Column(
+            modifier = Modifier.weight(0.82f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            WindowsMasterVolumeCard(
+                uiState = uiState,
+                onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
+                onWindowsMasterVolumeChanged = onWindowsMasterVolumeChanged,
+                onWindowsMasterMuteChanged = onWindowsMasterMuteChanged,
+            )
+            RunningStatusCard(uiState = uiState)
+            PlaybackVolumeCard(
+                uiState = uiState,
+                onVolumeChanged = onVolumeChanged,
+                onPlaybackCacheChanged = onPlaybackCacheChanged,
+            )
+        }
         TabletSessionsCard(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1.48f),
             uiState = uiState,
+            onRequestWindowsVolumeSnapshot = onRequestWindowsVolumeSnapshot,
             onWindowsSessionVolumeChanged = onWindowsSessionVolumeChanged,
             onWindowsSessionMuteChanged = onWindowsSessionMuteChanged,
         )
@@ -356,93 +363,10 @@ internal fun ScreenOffStabilityCard(
 }
 
 @Composable
-private fun TabletMasterVolumeCard(
-    uiState: PlaybackUiState,
-    onVolumeChanged: (Float) -> Unit,
-    onPlaybackCacheChanged: (Int) -> Unit,
-    onRequestWindowsVolumeSnapshot: () -> Unit,
-    onWindowsMasterVolumeChanged: (Float) -> Unit,
-    onWindowsMasterMuteChanged: (Boolean) -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("Windows 主音量", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "${uiState.windowsVolumeCatalog.masterVolume.deviceName} · ${(uiState.windowsVolumeCatalog.masterVolume.volume * 100).toInt()}%",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        "最近同步：${formatTimestamp(uiState.windowsVolumeCatalog.capturedAtMillis)} · ${uiState.windowsVolumeStatusMessage}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    uiState.windowsVolumeErrorMessage?.takeIf { it.isNotBlank() }?.let { error ->
-                        Text(text = error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                FilledTonalButton(onClick = onRequestWindowsVolumeSnapshot) {
-                    Text(if (uiState.windowsVolumeLoading) "同步中..." else "刷新")
-                }
-                OutlinedButton(onClick = { onWindowsMasterMuteChanged(!uiState.windowsVolumeCatalog.masterVolume.isMuted) }) {
-                    Text(if (uiState.windowsVolumeCatalog.masterVolume.isMuted) "取消静音" else "静音")
-                }
-            }
-
-            Slider(
-                value = uiState.windowsVolumeCatalog.masterVolume.volume,
-                onValueChange = onWindowsMasterVolumeChanged,
-                valueRange = 0f..1f,
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text("本机播放音量", style = MaterialTheme.typography.bodyMedium)
-                Slider(
-                    value = uiState.volume,
-                    onValueChange = onVolumeChanged,
-                    valueRange = 0f..1f,
-                    modifier = Modifier.weight(1f),
-                )
-                Text("${(uiState.volume * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text("播放缓存", style = MaterialTheme.typography.bodyMedium)
-                Slider(
-                    value = uiState.playbackCacheMilliseconds.toFloat(),
-                    onValueChange = { onPlaybackCacheChanged(it.toInt()) },
-                    valueRange = PlaybackCacheConfig.MIN_MILLISECONDS.toFloat()..PlaybackCacheConfig.MAX_MILLISECONDS.toFloat(),
-                    steps = PlaybackCacheConfig.sliderSteps(),
-                    modifier = Modifier.weight(1f),
-                )
-                Text("${uiState.playbackCacheMilliseconds}ms", style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-    }
-}
-
-@Composable
 private fun TabletSessionsCard(
     modifier: Modifier = Modifier,
     uiState: PlaybackUiState,
+    onRequestWindowsVolumeSnapshot: () -> Unit,
     onWindowsSessionVolumeChanged: (String, Float) -> Unit,
     onWindowsSessionMuteChanged: (String, Boolean) -> Unit,
 ) {
@@ -451,43 +375,24 @@ private fun TabletSessionsCard(
         hiddenProcessNames = uiState.hiddenProcessNames,
     )
 
-    Card(
+    Column(
         modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-//            Row(
-//                modifier = Modifier.fillMaxWidth(),
-//                horizontalArrangement = Arrangement.SpaceBetween,
-//                verticalAlignment = Alignment.CenterVertically,
-//            ) {
-//                Text("应用音频会话", style = MaterialTheme.typography.titleMedium)
-//                Text("${uiState.windowsVolumeCatalog.sessions.size} 个", style = MaterialTheme.typography.bodyMedium)
-//            }
-
-            if (visibleSessions.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("当前还没有可展示的 Windows 应用音量会话。")
-                }
-            } else {
-                LazyRow(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    items(
-                        items = visibleSessions,
-                        key = { session -> session.sessionId },
-                    ) { session ->
-                        TabletWindowsSessionCard(
-                            session = session,
-                            onVolumeChanged = { volume -> onWindowsSessionVolumeChanged(session.sessionId, volume) },
-                            onToggleMute = { onWindowsSessionMuteChanged(session.sessionId, !session.isMuted) },
-                        )
-                    }
+        SessionsHeader(sessionCount = visibleSessions.size, onRefresh = onRequestWindowsVolumeSnapshot)
+        SessionsState(uiState, visibleSessions, onRefresh = onRequestWindowsVolumeSnapshot) {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(250.dp),
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(visibleSessions, key = { it.sessionId }) { session ->
+                    CompactWindowsSessionCard(
+                        session = session,
+                        onVolumeChanged = { volume -> onWindowsSessionVolumeChanged(session.sessionId, volume) },
+                        onToggleMute = { onWindowsSessionMuteChanged(session.sessionId, !session.isMuted) },
+                    )
                 }
             }
         }
@@ -495,57 +400,118 @@ private fun TabletSessionsCard(
 }
 
 @Composable
-private fun TabletWindowsSessionCard(
-    session: WindowsAppVolumeSession,
-    onVolumeChanged: (Float) -> Unit,
-    onToggleMute: () -> Unit,
+private fun WindowsMasterVolumeCard(
+    uiState: PlaybackUiState,
+    onRequestWindowsVolumeSnapshot: () -> Unit,
+    onWindowsMasterVolumeChanged: (Float) -> Unit,
+    onWindowsMasterMuteChanged: (Boolean) -> Unit,
 ) {
+    val master = uiState.windowsVolumeCatalog.masterVolume
     Card(
-        modifier = Modifier
-            .width(148.dp)
-            .fillMaxSize(),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            SessionIcon(session)
-            Text(
-                text = session.displayName,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Windows 主音量", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        master.deviceName,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text("${(master.volume * 100).toInt()}%", style = MaterialTheme.typography.headlineMedium)
+                IconButton(onClick = { onWindowsMasterMuteChanged(!master.isMuted) }) {
+                    Icon(
+                        imageVector = if (master.isMuted) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                        contentDescription = if (master.isMuted) "取消 Windows 主音量静音" else "将 Windows 主音量静音",
+                        tint = if (master.isMuted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Slider(
+                value = master.volume,
+                onValueChange = onWindowsMasterVolumeChanged,
+                valueRange = 0f..1f,
             )
-            Text(
-                text = session.processName.ifBlank { "unknown" },
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-            )
-            Text(
-                text = "${(session.volume * 100).toInt()}%",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Slider(
-                    value = session.volume,
-                    onValueChange = onVolumeChanged,
-                    valueRange = 0f..1f,
-                    modifier = Modifier
-                        .width(190.dp)
-                        .rotate(-90f),
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${uiState.windowsVolumeStatusMessage}  ${formatTimestamp(uiState.windowsVolumeCatalog.capturedAtMillis)}",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFBFC5CC),
                 )
+                IconButton(onClick = onRequestWindowsVolumeSnapshot, enabled = !uiState.windowsVolumeLoading) {
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = "刷新 Windows 音量",
+                        tint = Color(0xFFF7F8FA),
+                    )
+                }
             }
-            OutlinedButton(onClick = onToggleMute) {
-                Text(if (session.isMuted) "取消静音" else "静音")
+        }
+    }
+}
+
+@Composable
+private fun SessionsHeader(sessionCount: Int, onRefresh: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("应用音量", style = MaterialTheme.typography.titleMedium)
+            Text("$sessionCount 个 Windows 音频会话", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        IconButton(onClick = onRefresh) {
+            Icon(Icons.Filled.Refresh, contentDescription = "刷新应用音量会话")
+        }
+    }
+}
+
+@Composable
+private fun SessionsState(
+    uiState: PlaybackUiState,
+    visibleSessions: List<WindowsAppVolumeSession>,
+    onRefresh: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    when {
+        uiState.windowsVolumeLoading && visibleSessions.isEmpty() -> Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                Text("正在同步 Windows 应用音量")
             }
+        }
+        !uiState.windowsVolumeErrorMessage.isNullOrBlank() -> SessionMessage(
+            title = "无法同步应用音量",
+            message = uiState.windowsVolumeErrorMessage,
+            action = "重新同步",
+            onAction = onRefresh,
+        )
+        visibleSessions.isEmpty() -> SessionMessage(
+            title = "暂无音频会话",
+            message = "在 Windows 上播放音频后刷新，会话会显示在这里。",
+            action = "刷新会话",
+            onAction = onRefresh,
+        )
+        else -> content()
+    }
+}
+
+@Composable
+private fun SessionMessage(title: String, message: String, action: String, onAction: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FilledTonalButton(onClick = onAction) { Text(action) }
         }
     }
 }

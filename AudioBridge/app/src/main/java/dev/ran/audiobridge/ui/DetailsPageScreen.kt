@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -33,6 +36,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.dp
@@ -54,79 +58,98 @@ internal fun DetailsPageScreen(
     onHideWindowsApp: (WindowsAppVolumeSession) -> Unit,
     onUnhideWindowsApp: (String) -> Unit,
 ) {
+    val configuration = LocalConfiguration.current
+    val isWideLayout = configuration.screenWidthDp >= 840 && configuration.screenWidthDp > configuration.screenHeightDp
     val visibleSessionCandidates = remember(uiState.windowsVolumeCatalog.sessions, uiState.hiddenProcessNames) {
         HiddenWindowsAppSupport.distinctSessionsByProcessName(uiState.windowsVolumeCatalog.sessions)
             .filterNot { uiState.hiddenProcessNames.contains(it.processName.trim()) }
     }
 
-    Column(
+    LazyVerticalGrid(
+        columns = if (isWideLayout) GridCells.Fixed(2) else GridCells.Fixed(1),
         modifier = Modifier
             .fillMaxSize()
             .padding(contentPadding)
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
+            .padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        ScreenOffStabilityCard(
-            uiState = uiState,
-            onApplyScreenOffPlaybackCachePreset = onApplyScreenOffPlaybackCachePreset,
-            onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
-        )
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("运行详情", style = MaterialTheme.typography.titleMedium)
-                Text("状态：${uiState.statusMessage}")
-                Text("服务：${if (uiState.serviceRunning) "运行中" else "未启动"}")
-                Text("连接：${if (uiState.isConnected) "已连接" else "未连接"}")
-                Text("播放：${if (uiState.isPlaying) "播放中" else "未播放"}")
-                Text("最新序号：${uiState.lastSequence}")
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = onStartService) {
-                        Text("启动后台播放")
-                    }
-                    OutlinedButton(onClick = onStopService) {
-                        Text("停止后台播放")
-                    }
-                }
-            }
+        item {
+            ScreenOffStabilityCard(
+                uiState = uiState,
+                onApplyScreenOffPlaybackCachePreset = onApplyScreenOffPlaybackCachePreset,
+                onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
+            )
         }
 
-        LanServerCard(
-            uiState = uiState,
-            onConnectUsb = onConnectUsb,
-            onConnectLanServer = onConnectLanServer,
-        )
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("当前会话", style = MaterialTheme.typography.titleMedium)
-                Text("编码：${uiState.sessionInfo.encoding}")
-                Text("采样率：${uiState.sessionInfo.sampleRate} Hz")
-                Text("声道：${uiState.sessionInfo.channels}")
-                Text("位深：${uiState.sessionInfo.bitsPerSample}")
-                Text("Buffer：${uiState.sessionInfo.bufferMilliseconds} ms")
-                Text("本地播放缓存：${uiState.playbackCacheMilliseconds} ms")
-            }
-        }
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("联调日志", style = MaterialTheme.typography.titleMedium)
-                if (uiState.recentLogs.isEmpty()) {
-                    Text("当前没有日志。")
-                } else {
-                    Column(modifier = Modifier.height(260.dp).verticalScroll(rememberScrollState())) {
-                        uiState.recentLogs.forEach { log ->
-                            Text(text = log, style = MaterialTheme.typography.bodySmall)
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("运行详情", style = MaterialTheme.typography.titleMedium)
+                    DetailValueRow("状态", uiState.statusMessage)
+                    DetailValueRow("服务", if (uiState.serviceRunning) "运行中" else "未启动")
+                    DetailValueRow("连接", if (uiState.isConnected) "已连接" else "未连接")
+                    DetailValueRow("播放", if (uiState.isPlaying) "播放中" else "未播放")
+                    DetailValueRow("最新序号", uiState.lastSequence.toString())
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = onStartService) {
+                            Text("启动后台播放")
+                        }
+                        OutlinedButton(onClick = onStopService) {
+                            Text("停止后台播放")
                         }
                     }
                 }
             }
         }
 
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            LanServerCard(
+                uiState = uiState,
+                onConnectUsb = onConnectUsb,
+                onConnectLanServer = onConnectLanServer,
+            )
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("当前会话", style = MaterialTheme.typography.titleMedium)
+                    DetailValueRow("编码", uiState.sessionInfo.encoding)
+                    DetailValueRow("采样率", "${uiState.sessionInfo.sampleRate} Hz")
+                    DetailValueRow("声道", uiState.sessionInfo.channels.toString())
+                    DetailValueRow("位深", uiState.sessionInfo.bitsPerSample.toString())
+                    DetailValueRow("发送缓冲", "${uiState.sessionInfo.bufferMilliseconds} ms")
+                    DetailValueRow("本地缓存", "${uiState.playbackCacheMilliseconds} ms")
+                }
+            }
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("联调日志", style = MaterialTheme.typography.titleMedium)
+                    if (uiState.recentLogs.isEmpty()) {
+                        Text("当前没有日志。")
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .height(220.dp)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            uiState.recentLogs.forEach { log ->
+                                Text(text = log, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("应用过滤", style = MaterialTheme.typography.titleMedium)
                 Text(
                     text = "已隐藏 ${uiState.hiddenWindowsApps.size} 个应用，主页面不会显示这些进程名对应的会话。",
@@ -157,11 +180,29 @@ internal fun DetailsPageScreen(
                         )
                     }
                 }
+                }
             }
         }
 
-        Text("提示：服务启动后会自动连接 Windows 服务器（USB 模式连接本机 reverse 端口，局域网模式连接所选服务器），并通过通知栏保持前台服务状态。")
-        Spacer(modifier = Modifier.height(8.dp))
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Text(
+                "服务启动后会自动连接 Windows。USB 模式使用 reverse 端口，局域网模式使用所选服务器。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DetailValueRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.labelLarge)
     }
 }
 
