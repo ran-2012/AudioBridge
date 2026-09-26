@@ -49,8 +49,14 @@ Android 端核心代码位于 [app/src/main/java/dev/ran/audiobridge](app/src/ma
 
 - [app/src/main/java/dev/ran/audiobridge/ui/AudioBridgeScreen.kt](app/src/main/java/dev/ran/audiobridge/ui/AudioBridgeScreen.kt)
   - 顶层页面容器
-  - 管理主页面 / 详情页面切换
+  - 管理控制页 / 频谱页 / 详情页切换
+  - 详情页关闭后返回进入前的主功能页
   - 组装运行状态卡片、播放音量卡片、Windows 音量控制卡片
+
+- [app/src/main/java/dev/ran/audiobridge/ui/AudioVisualizerScreen.kt](app/src/main/java/dev/ran/audiobridge/ui/AudioVisualizerScreen.kt)
+  - 绘制左右声道频谱、Lissajous 相位图和短时 RMS `dBFS` 电平
+  - 区分未连接、等待音频、音频活动和 500ms 无帧空闲状态
+  - 按手机竖屏与平板横屏约束调整上部相位图和电平布局
 
 - [app/src/main/java/dev/ran/audiobridge/ui/MainPageScreen.kt](app/src/main/java/dev/ran/audiobridge/ui/MainPageScreen.kt)
   - 主界面
@@ -89,6 +95,7 @@ Android 端核心代码位于 [app/src/main/java/dev/ran/audiobridge](app/src/ma
 - [app/src/main/java/dev/ran/audiobridge/repository/PlaybackStateRepository.kt](app/src/main/java/dev/ran/audiobridge/repository/PlaybackStateRepository.kt)
   - 当前全局单例状态中心
   - 维护 `PlaybackUiState`
+  - 通过独立 `StateFlow` 发布音频可视化帧，不把大型数组并入 `PlaybackUiState`
   - 提供状态更新函数，例如：
     - 服务状态更新
     - 连接状态更新
@@ -104,8 +111,19 @@ Android 端核心代码位于 [app/src/main/java/dev/ran/audiobridge](app/src/ma
 - [app/src/main/java/dev/ran/audiobridge/audio/AudioPlaybackManager.kt](app/src/main/java/dev/ran/audiobridge/audio/AudioPlaybackManager.kt)
   - 根据 `SessionInit` 配置 `AudioTrack`
   - 写入音频帧数据
+  - 将成功写入的 PCM 旁路提交给异步可视化处理器
   - 控制本地播放音量
   - 连接断开时释放播放资源
+
+- [app/src/main/java/dev/ran/audiobridge/audio/AudioVisualizationAnalyzer.kt](app/src/main/java/dev/ran/audiobridge/audio/AudioVisualizationAnalyzer.kt)
+  - 归一化 PCM16 / Float32，拆分单声道和双声道
+  - 使用 4096 样本 Hann 窗 FFT 生成 32 个对数频带；48 kHz 下频率分辨率约为 11.72 Hz
+  - 计算 128 个 L/R 相位点和短时 RMS `dBFS`
+
+- [app/src/main/java/dev/ran/audiobridge/audio/AudioVisualizationProcessor.kt](app/src/main/java/dev/ran/audiobridge/audio/AudioVisualizationProcessor.kt)
+  - 使用独立协程执行分析
+  - 输入队列容量固定为 1，过载时保留最新帧
+  - 最多每 33ms 发布一次，500ms 无帧后清空结果
 
 ### 3.7 协议 / 网络层
 
@@ -177,6 +195,7 @@ Android 端核心代码位于 [app/src/main/java/dev/ran/audiobridge](app/src/ma
 5. 当收到 `AudioFrame`：
   - `AudioPlaybackManager.write()` 以非阻塞方式写入 PCM 数据
   - 若检测到播放积压超过本地缓存阈值，会主动丢弃旧音频并保留最新音频，避免延迟持续放大
+  - 成功写入的 PCM 复制固定分析窗口到 `AudioVisualizationProcessor`，FFT 不阻塞播放写入
    - `PlaybackStateRepository.updateSequence()` 更新最新序号
    - `PlaybackStateRepository.updatePlayback()` 更新播放状态
 6. 当连接断开：
@@ -185,7 +204,19 @@ Android 端核心代码位于 [app/src/main/java/dev/ran/audiobridge](app/src/ma
 
 当前 Android 端新增了本地“播放缓存”设置项，默认 `120ms`，范围 `40ms ~ 400ms`。缓存越小，恢复前台后的延迟越低；缓存越大，弱网络或短时抖动下更稳。
 
-## 4.3 Windows 音量同步与控制链路
+## 4.3 音频可视化
+
+顶部“控制 / 频谱”页签切换主功能页，不重启服务或连接。频谱页显示：
+
+- 左右声道独立频谱，L 为青色，R 为琥珀色；显示对数频率横轴、`dBFS` 纵轴和网格
+- 左声道为 X、右声道为 Y 的 Lissajous 相位图
+- 同一分析窗口的 L/R 独立短时 RMS 电平，范围 `-60..0 dBFS`
+- 每个声道显示浅色短时峰值线，保持约 700ms 后逐渐回落
+- 静音显示 `-∞ dBFS`，不使用 LUFS 标识
+
+应用固定使用深色 Material 主题。状态栏和导航栏使用深色背景及浅色图标。
+
+## 4.4 Windows 音量同步与控制链路
 
 1. 用户在 UI 点击“刷新 Windows 音量”或拖动某个音量滑杆。
 2. `MainViewModel` 将动作转为 `Intent` 发送给 `AudioBridgeService`。
@@ -338,6 +369,9 @@ Android 当前重点处理的消息：
 
 - [app/src/test/java/dev/ran/audiobridge/network/ProtocolReaderTest.kt](app/src/test/java/dev/ran/audiobridge/network/ProtocolReaderTest.kt)
 - [app/src/test/java/dev/ran/audiobridge/network/WindowsVolumeJsonCodecTest.kt](app/src/test/java/dev/ran/audiobridge/network/WindowsVolumeJsonCodecTest.kt)
+- [app/src/test/java/dev/ran/audiobridge/audio/AudioVisualizationAnalyzerTest.kt](app/src/test/java/dev/ran/audiobridge/audio/AudioVisualizationAnalyzerTest.kt)
+- [app/src/test/java/dev/ran/audiobridge/audio/AudioVisualizationProcessorTest.kt](app/src/test/java/dev/ran/audiobridge/audio/AudioVisualizationProcessorTest.kt)
+- [app/src/androidTest/java/dev/ran/audiobridge/ui/AudioBridgeUiTest.kt](app/src/androidTest/java/dev/ran/audiobridge/ui/AudioBridgeUiTest.kt)
 
 高价值补强方向：
 

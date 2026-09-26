@@ -2,6 +2,7 @@ package dev.ran.audiobridge
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -17,13 +18,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel.autoStartServiceIfNeeded()
-        enableEdgeToEdge()
+        val systemBarColor = 0xFF111113.toInt()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(systemBarColor),
+            navigationBarStyle = SystemBarStyle.dark(systemBarColor),
+        )
         setContent {
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+            val visualizationState by viewModel.visualizationState.collectAsStateWithLifecycle()
 
             AudioBridgeTheme {
                 AudioBridgeScreen(
                     uiState = uiState,
+                    visualizationState = visualizationState,
                     onStartService = viewModel::startService,
                     onStopService = viewModel::stopService,
                     onReconnect = viewModel::reconnect,

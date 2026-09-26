@@ -35,6 +35,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = PlaybackStateRepository.state.value,
     )
+    val visualizationState = PlaybackStateRepository.visualizationState
 
     init {
         refreshBatteryOptimizationState()

@@ -1,6 +1,7 @@
 package dev.ran.audiobridge.repository
 
 import android.util.Log
+import dev.ran.audiobridge.audio.AudioVisualizationState
 import dev.ran.audiobridge.model.HiddenWindowsApp
 import dev.ran.audiobridge.model.LanServerInfo
 import dev.ran.audiobridge.model.PlaybackSessionInfo
@@ -17,8 +18,14 @@ object PlaybackStateRepository {
     private const val TAG = "AudioBridge"
     private const val MAX_LOG_COUNT = 120
     private val mutableState = MutableStateFlow(PlaybackUiState())
+    private val mutableVisualizationState = MutableStateFlow(AudioVisualizationState())
 
     val state: StateFlow<PlaybackUiState> = mutableState.asStateFlow()
+    val visualizationState: StateFlow<AudioVisualizationState> = mutableVisualizationState.asStateFlow()
+
+    fun updateVisualizationState(state: AudioVisualizationState) {
+        mutableVisualizationState.value = state
+    }
 
     fun updateServiceRunning(isRunning: Boolean, statusMessage: String) {
         mutableState.value = mutableState.value.copy(
@@ -27,6 +34,9 @@ object PlaybackStateRepository {
             isPlaying = if (isRunning) mutableState.value.isPlaying else false,
             isConnected = if (isRunning) mutableState.value.isConnected else false,
         )
+        if (!isRunning) {
+            mutableVisualizationState.value = AudioVisualizationState()
+        }
     }
 
     fun updateConnection(isConnected: Boolean, statusMessage: String) {
@@ -36,6 +46,9 @@ object PlaybackStateRepository {
             isPlaying = if (isConnected) mutableState.value.isPlaying else false,
             windowsVolumeStatusMessage = if (isConnected) mutableState.value.windowsVolumeStatusMessage else "Windows 未连接",
         )
+        if (!isConnected) {
+            mutableVisualizationState.value = AudioVisualizationState()
+        }
     }
 
     fun updateConnectTarget(host: String, port: Int) {

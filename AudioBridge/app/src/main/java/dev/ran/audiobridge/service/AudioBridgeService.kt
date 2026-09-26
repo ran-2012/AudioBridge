@@ -159,6 +159,9 @@ class AudioBridgeService : Service() {
         ).apply {
             setReferenceCounted(false)
         }
+        serviceScope.launch {
+            playbackManager.visualizationState.collect(PlaybackStateRepository::updateVisualizationState)
+        }
         PlaybackStateRepository.appendLog("Service: onCreate 完成，通知通道已就绪")
     }
 
@@ -185,6 +188,7 @@ class AudioBridgeService : Service() {
 
     override fun onDestroy() {
         stopBridge()
+        playbackManager.close()
         serviceScope.cancel()
         super.onDestroy()
     }

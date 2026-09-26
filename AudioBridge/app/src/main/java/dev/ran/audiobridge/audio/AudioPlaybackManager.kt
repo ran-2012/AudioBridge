@@ -6,8 +6,11 @@ import android.media.AudioTrack
 import dev.ran.audiobridge.model.AndroidPlaybackStatus
 import dev.ran.audiobridge.model.BridgePacket
 import dev.ran.audiobridge.model.PlaybackSessionInfo
+import kotlinx.coroutines.flow.StateFlow
 
-class AudioPlaybackManager {
+class AudioPlaybackManager(
+    private val visualizationProcessor: AudioVisualizationProcessor = AudioVisualizationProcessor(),
+) : AutoCloseable {
     data class WriteResult(
         val trimmedBufferedAudio: Boolean = false,
         val droppedBytes: Int = 0,
@@ -23,6 +26,9 @@ class AudioPlaybackManager {
     private var currentVolume: Float = 1.0f
     private var playbackCacheMilliseconds: Int = PlaybackCacheConfig.DEFAULT_MILLISECONDS
     private var playbackRuntime: PlaybackRuntime? = null
+    private var currentSession: BridgePacket.SessionInit? = null
+
+    val visualizationState: StateFlow<AudioVisualizationState> = visualizationProcessor.state
 
     fun updatePlaybackCacheMilliseconds(milliseconds: Int): Int {
         val normalized = PlaybackCacheConfig.normalize(milliseconds)
@@ -81,6 +87,7 @@ class AudioPlaybackManager {
                 play()
             }
         playbackRuntime = PlaybackRuntime(controller = controller)
+        currentSession = sessionInit
 
         return PlaybackSessionInfo(
             encoding = if (sessionInit.encodingCode == 2) "Float32" else "PCM16",
@@ -131,6 +138,17 @@ class AudioPlaybackManager {
             "AudioTrack.write 返回错误码: $result, sequence=${packet.sequence}, bytes=${packet.audioData.size}"
         }
 
+        if (result > 0) {
+            currentSession?.let { session ->
+                visualizationProcessor.submit(
+                    audioData = packet.audioData.copyOf(result),
+                    encodingCode = session.encodingCode,
+                    sampleRate = session.sampleRate,
+                    channels = session.channels,
+                )
+            }
+        }
+
         runtime.lastPlaybackHeadPosition = maxOf(runtime.lastPlaybackHeadPosition, track.playbackHeadPosition.toLong())
         return WriteResult(
             trimmedBufferedAudio = trimmedBufferedAudio,
@@ -169,6 +187,13 @@ class AudioPlaybackManager {
         }
         audioTrack = null
         playbackRuntime = null
+        currentSession = null
+        visualizationProcessor.reset()
+    }
+
+    override fun close() {
+        release()
+        visualizationProcessor.close()
     }
 
     private fun writeNonBlocking(track: AudioTrack, audioData: ByteArray): Int =

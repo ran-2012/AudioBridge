@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -27,6 +28,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -42,8 +46,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import dev.ran.audiobridge.audio.AudioVisualizationState
 import dev.ran.audiobridge.audio.PlaybackCacheConfig
 import dev.ran.audiobridge.model.PlaybackUiState
 import dev.ran.audiobridge.model.WindowsAppVolumeSession
@@ -59,6 +66,7 @@ internal data class RunningStatusUi(
 
 private enum class AudioBridgePage {
     Main,
+    Visualizer,
     Details,
 }
 
@@ -66,6 +74,7 @@ private enum class AudioBridgePage {
 @Composable
 fun AudioBridgeScreen(
     uiState: PlaybackUiState,
+    visualizationState: AudioVisualizationState,
     onStartService: () -> Unit,
     onStopService: () -> Unit,
     onReconnect: () -> Unit,
@@ -84,29 +93,53 @@ fun AudioBridgeScreen(
     onUnhideWindowsApp: (String) -> Unit,
 ) {
     var currentPage by rememberSaveable { mutableStateOf(AudioBridgePage.Main.name) }
+    var previousMainPage by rememberSaveable { mutableStateOf(AudioBridgePage.Main.name) }
+    val showBrandTitle = LocalConfiguration.current.screenWidthDp >= 600
+    val showConnectionBadge = LocalConfiguration.current.screenWidthDp >= 480
     val page = remember(currentPage) {
-        if (currentPage == AudioBridgePage.Details.name) {
-            AudioBridgePage.Details
-        } else {
-            AudioBridgePage.Main
-        }
+        AudioBridgePage.entries.firstOrNull { it.name == currentPage } ?: AudioBridgePage.Main
     }
 
     Scaffold(
         topBar = {
-            if (page == AudioBridgePage.Main) {
-                TopAppBar(
-                    title = { Text("AudioBridge") },
+            if (page != AudioBridgePage.Details) {
+                CenterAlignedTopAppBar(
+                    navigationIcon = {
+                        if (showBrandTitle) {
+                            Text(
+                                text = "AudioBridge",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding(start = 16.dp),
+                            )
+                        }
+                    },
+                    title = {
+                        MainPageTabs(
+                            selectedPage = page,
+                            onPageSelected = {
+                                currentPage = it.name
+                                previousMainPage = it.name
+                            },
+                        )
+                    },
                     actions = {
-                        ConnectStatusBadge(uiState = uiState)
-                        Spacer(modifier = Modifier.width(8.dp))
+                        if (showConnectionBadge) {
+                            ConnectStatusBadge(uiState = uiState)
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
                         IconButton(onClick = onReconnect) {
                             Icon(
                                 imageVector = Icons.Filled.Refresh,
                                 contentDescription = "重连",
                             )
                         }
-                        IconButton(onClick = { currentPage = AudioBridgePage.Details.name }) {
+                        IconButton(
+                            onClick = {
+                                previousMainPage = page.name
+                                currentPage = AudioBridgePage.Details.name
+                            },
+                            modifier = Modifier.testTag("details-button"),
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.MoreVert,
                                 contentDescription = "查看当前会话与日志",
@@ -118,7 +151,10 @@ fun AudioBridgeScreen(
                 TopAppBar(
                     title = { Text("当前会话与日志") },
                     actions = {
-                        IconButton(onClick = { currentPage = AudioBridgePage.Main.name }) {
+                        IconButton(
+                            onClick = { currentPage = previousMainPage },
+                            modifier = Modifier.testTag("details-close"),
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.Close,
                                 contentDescription = "关闭日志页面",
@@ -142,6 +178,12 @@ fun AudioBridgeScreen(
                 onWindowsSessionMuteChanged = onWindowsSessionMuteChanged,
             )
 
+            AudioBridgePage.Visualizer -> AudioVisualizerScreen(
+                uiState = uiState,
+                visualizationState = visualizationState,
+                contentPadding = innerPadding,
+            )
+
             AudioBridgePage.Details -> DetailsPageScreen(
                 uiState = uiState,
                 contentPadding = innerPadding,
@@ -153,6 +195,29 @@ fun AudioBridgeScreen(
                 onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
                 onHideWindowsApp = onHideWindowsApp,
                 onUnhideWindowsApp = onUnhideWindowsApp,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MainPageTabs(
+    selectedPage: AudioBridgePage,
+    onPageSelected: (AudioBridgePage) -> Unit,
+) {
+    val pages = listOf(AudioBridgePage.Main to "控制", AudioBridgePage.Visualizer to "频谱")
+    SingleChoiceSegmentedButtonRow(
+        modifier = Modifier
+            .width(164.dp)
+            .testTag("main-page-tabs"),
+    ) {
+        pages.forEachIndexed { index, (page, label) ->
+            SegmentedButton(
+                selected = selectedPage == page,
+                onClick = { onPageSelected(page) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = pages.size),
+                label = { Text(label) },
             )
         }
     }
@@ -195,9 +260,9 @@ internal fun RunningStatusCard(uiState: PlaybackUiState) {
 @Composable
 private fun ConnectStatusBadge(uiState: PlaybackUiState) {
     val (color, label) = when {
-        uiState.isConnected -> Color(0xFF1B8A5A) to "已连接"
-        uiState.serviceRunning -> Color(0xFFD06A00) to "连接中"
-        else -> Color(0xFF9E9E9E) to "未连接"
+        uiState.isConnected -> Color(0xFF6FE0B0) to "已连接"
+        uiState.serviceRunning -> Color(0xFFFFD08A) to "连接中"
+        else -> MaterialTheme.colorScheme.onSurfaceVariant to "未连接"
     }
 
     Row(
@@ -380,25 +445,25 @@ internal fun formatTimestamp(timestamp: Long): String {
 internal fun buildRunningStatusUi(uiState: PlaybackUiState): RunningStatusUi {
     return when {
         !uiState.serviceRunning -> RunningStatusUi(
-            color = Color(0xFFB3261E),
+            color = Color(0xFFFFB4AB),
             label = "未启动",
             description = "后台播放服务未运行",
         )
 
         uiState.isConnected && uiState.isPlaying -> RunningStatusUi(
-            color = Color(0xFF2E7D32),
+            color = Color(0xFF6FE0B0),
             label = "运行中",
             description = "已连接 Windows 并正在播放音频",
         )
 
         uiState.isConnected -> RunningStatusUi(
-            color = Color(0xFF1565C0),
+            color = Color(0xFF8FCBFF),
             label = "已连接",
             description = "服务正常，等待新的音频播放数据",
         )
 
         else -> RunningStatusUi(
-            color = Color(0xFFF9A825),
+            color = Color(0xFFFFD08A),
             label = "等待连接",
             description = "服务已启动，正在等待 Windows 端接入",
         )

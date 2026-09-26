@@ -3,12 +3,20 @@ package dev.ran.audiobridge.ui
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
+import dev.ran.audiobridge.audio.AudioVisualizationActivity
+import dev.ran.audiobridge.audio.AudioVisualizationAnalyzer
+import dev.ran.audiobridge.audio.AudioVisualizationFrame
+import dev.ran.audiobridge.audio.AudioVisualizationState
+import dev.ran.audiobridge.audio.StereoPhasePoint
 import dev.ran.audiobridge.model.PlaybackSessionInfo
 import dev.ran.audiobridge.model.PlaybackUiState
 import dev.ran.audiobridge.model.WindowsAppVolumeSession
 import dev.ran.audiobridge.model.WindowsMasterVolume
 import dev.ran.audiobridge.model.WindowsVolumeCatalog
 import dev.ran.audiobridge.ui.theme.AudioBridgeTheme
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.sin
 
 private object PreviewPlaybackStates {
     private val sessions = listOf(
@@ -103,9 +111,40 @@ private object PreviewPlaybackStates {
     )
 }
 
+private object PreviewVisualizationState {
+    private fun spectrum(peak: Int, secondaryPeak: Int): List<Float> =
+        List(AudioVisualizationAnalyzer.SPECTRUM_BAND_COUNT) { index ->
+            val primary = (1f - abs(index - peak) / 6f).coerceAtLeast(0f)
+            val secondary = (0.58f - abs(index - secondaryPeak) / 9f).coerceAtLeast(0f)
+            maxOf(primary, secondary, 0.04f + (index % 3) * 0.018f)
+        }
+
+    private val phasePoints = List(AudioVisualizationAnalyzer.PHASE_POINT_COUNT) { index ->
+        val angle = index * 2.0 * PI / AudioVisualizationAnalyzer.PHASE_POINT_COUNT
+        StereoPhasePoint(
+            left = (sin(angle) * 0.86).toFloat(),
+            right = (sin(angle * 1.03 + PI / 5.0) * 0.68).toFloat(),
+        )
+    }
+
+    val active = AudioVisualizationState(
+        activity = AudioVisualizationActivity.Active,
+        frame = AudioVisualizationFrame(
+            leftSpectrum = spectrum(peak = 8, secondaryPeak = 20),
+            rightSpectrum = spectrum(peak = 14, secondaryPeak = 25),
+            phasePoints = phasePoints,
+            levelDbfs = -11.8f,
+            capturedAtElapsedRealtimeMillis = 1L,
+            sampleRate = 48_000,
+            leftLevelDbfs = -8.4f,
+            rightLevelDbfs = -16.7f,
+        ),
+    )
+}
+
 @Composable
 private fun MainPagePreview(uiState: PlaybackUiState) {
-    AudioBridgeTheme(dynamicColor = false) {
+    AudioBridgeTheme {
         MainPageScreen(
             uiState = uiState,
             contentPadding = PaddingValues(),
@@ -116,6 +155,17 @@ private fun MainPagePreview(uiState: PlaybackUiState) {
             onWindowsMasterMuteChanged = {},
             onWindowsSessionVolumeChanged = { _, _ -> },
             onWindowsSessionMuteChanged = { _, _ -> },
+        )
+    }
+}
+
+@Composable
+private fun VisualizerPreview() {
+    AudioBridgeTheme {
+        AudioVisualizerScreen(
+            uiState = PreviewPlaybackStates.playing,
+            visualizationState = PreviewVisualizationState.active,
+            contentPadding = PaddingValues(),
         )
     }
 }
@@ -139,3 +189,23 @@ private fun PhoneEmptyPreview() = MainPagePreview(PreviewPlaybackStates.empty)
 @Preview(name = "Tablet - Playing", widthDp = 1024, heightDp = 720, showBackground = true)
 @Composable
 private fun TabletPlayingPreview() = MainPagePreview(PreviewPlaybackStates.playing)
+
+@Preview(
+    name = "Visualizer - Phone",
+    widthDp = 390,
+    heightDp = 844,
+    showBackground = true,
+    backgroundColor = 0xFF111113,
+)
+@Composable
+private fun PhoneVisualizerPreview() = VisualizerPreview()
+
+@Preview(
+    name = "Visualizer - Tablet Landscape",
+    widthDp = 1024,
+    heightDp = 720,
+    showBackground = true,
+    backgroundColor = 0xFF111113,
+)
+@Composable
+private fun TabletVisualizerPreview() = VisualizerPreview()

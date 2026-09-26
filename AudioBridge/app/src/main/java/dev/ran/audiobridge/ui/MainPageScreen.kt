@@ -291,8 +291,8 @@ internal fun ScreenOffStabilityCard(
 ) {
     val isIgnoringBatteryOptimizations = uiState.isIgnoringBatteryOptimizations
     val statusColor = when (isIgnoringBatteryOptimizations) {
-        true -> Color(0xFF1B8A5A)
-        false -> Color(0xFFD06A00)
+        true -> Color(0xFF6FE0B0)
+        false -> Color(0xFFFFD08A)
         null -> MaterialTheme.colorScheme.outline
     }
     val shouldRecommendHigherCache =
@@ -445,13 +445,13 @@ private fun WindowsMasterVolumeCard(
                     "${uiState.windowsVolumeStatusMessage}  ${formatTimestamp(uiState.windowsVolumeCatalog.capturedAtMillis)}",
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFBFC5CC),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 IconButton(onClick = onRequestWindowsVolumeSnapshot, enabled = !uiState.windowsVolumeLoading) {
                     Icon(
                         Icons.Filled.Refresh,
                         contentDescription = "刷新 Windows 音量",
-                        tint = Color(0xFFF7F8FA),
+                        tint = MaterialTheme.colorScheme.onSurface,
                     )
                 }
             }
