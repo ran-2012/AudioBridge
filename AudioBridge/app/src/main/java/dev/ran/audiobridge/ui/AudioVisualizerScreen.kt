@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -36,10 +37,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
@@ -163,21 +164,20 @@ private fun VisualizationStatusHeader(status: VisualizationStatus) {
     }
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("实时分析", style = MaterialTheme.typography.titleMedium)
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .background(color, RoundedCornerShape(2.dp)),
-            )
-            Text(status.label, style = MaterialTheme.typography.labelLarge, color = color)
-        }
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .background(color, RoundedCornerShape(2.dp)),
+        )
+        Text(
+            text = status.label,
+            style = MaterialTheme.typography.labelLarge,
+            color = color,
+            modifier = Modifier.padding(start = 8.dp),
+        )
     }
 }
 
@@ -226,6 +226,29 @@ private fun interpolateFrame(
 @Composable
 private fun PhasePanel(frame: AudioVisualizationFrame, modifier: Modifier = Modifier) {
     val axisColor = MaterialTheme.colorScheme.outlineVariant
+    val phasePointBatches = remember { mutableStateListOf<TimedPhasePointBatch>() }
+    val inspectionMode = LocalInspectionMode.current
+
+    LaunchedEffect(frame.capturedAtElapsedRealtimeMillis) {
+        if (frame.phasePoints.isNotEmpty()) {
+            phasePointBatches += TimedPhasePointBatch(
+                points = frame.phasePoints,
+                addedAtNanos = System.nanoTime(),
+            )
+        }
+    }
+    LaunchedEffect(Unit) {
+        if (!inspectionMode) {
+            while (isActive) {
+                withFrameNanos { frameNanos ->
+                    phasePointBatches.removeAll { batch ->
+                        frameNanos - batch.addedAtNanos >= PHASE_POINT_LIFETIME_NANOS
+                    }
+                }
+            }
+        }
+    }
+
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("L/R 相位", style = MaterialTheme.typography.labelLarge)
@@ -241,39 +264,49 @@ private fun PhasePanel(frame: AudioVisualizationFrame, modifier: Modifier = Modi
         ) {
             val center = Offset(size.width / 2f, size.height / 2f)
             val radius = min(size.width, size.height) / 2f
-            drawLine(
-                axisColor,
-                Offset(center.x - radius, center.y),
-                Offset(center.x + radius, center.y),
-                1.dp.toPx(),
-            )
-            drawLine(
-                axisColor,
-                Offset(center.x, center.y - radius),
-                Offset(center.x, center.y + radius),
-                1.dp.toPx(),
-            )
-            if (frame.phasePoints.isNotEmpty()) {
-                val path = Path()
-                frame.phasePoints.forEachIndexed { index, point ->
-                    val position = Offset(
-                        x = center.x + point.left * radius * PHASE_TRACE_SCALE,
-                        y = center.y - point.right * radius * PHASE_TRACE_SCALE,
+            clipRect(
+                left = center.x - radius,
+                top = center.y - radius,
+                right = center.x + radius,
+                bottom = center.y + radius,
+            ) {
+                rotate(degrees = PHASE_ROTATION_DEGREES, pivot = center) {
+                    drawLine(
+                        axisColor,
+                        Offset(center.x - radius, center.y),
+                        Offset(center.x + radius, center.y),
+                        1.dp.toPx(),
                     )
-                    if (index == 0) path.moveTo(position.x, position.y) else path.lineTo(position.x, position.y)
-                }
-                clipRect(
-                    left = center.x - radius,
-                    top = center.y - radius,
-                    right = center.x + radius,
-                    bottom = center.y + radius,
-                ) {
-                    drawPath(path, LeftChannelColor, style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round))
+                    drawLine(
+                        axisColor,
+                        Offset(center.x, center.y - radius),
+                        Offset(center.x, center.y + radius),
+                        1.dp.toPx(),
+                    )
+                    phasePointBatches.forEach { batch ->
+                        drawPoints(
+                            points = batch.points.map { point ->
+                                Offset(
+                                    x = center.x + point.left * radius * PHASE_TRACE_SCALE,
+                                    y = center.y - point.right * radius * PHASE_TRACE_SCALE,
+                                )
+                            },
+                            pointMode = PointMode.Points,
+                            color = LeftChannelColor,
+                            strokeWidth = PHASE_POINT_SIZE.toPx(),
+                            cap = StrokeCap.Round,
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+private data class TimedPhasePointBatch(
+    val points: List<StereoPhasePoint>,
+    val addedAtNanos: Long,
+)
 
 @Composable
 private fun LevelMeter(
@@ -667,5 +700,8 @@ private fun Color.toArgb(): Int = argb
 
 private val SPECTRUM_DB_TICKS = listOf(-60, -48, -36, -24, -12, 0)
 private const val PHASE_TRACE_SCALE = 2f
+private const val PHASE_ROTATION_DEGREES = -45f
+private val PHASE_POINT_SIZE = 2.dp
+private const val PHASE_POINT_LIFETIME_NANOS = 1_000_000_000L
 private const val PEAK_HOLD_MILLIS = 700L
 private const val PEAK_FALL_PER_SECOND = 0.36f
