@@ -528,7 +528,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         _heartbeatTask = Task.Run(() => HeartbeatLoopAsync(_heartbeatCancellationTokenSource.Token));
     }
 
-    private async Task CancelHeartbeatLoopAsync()
+    private async Task CancelHeartbeatLoopAsync(bool waitForCompletion = true)
     {
         var cancellationTokenSource = _heartbeatCancellationTokenSource;
         var heartbeatTask = _heartbeatTask;
@@ -544,12 +544,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         cancellationTokenSource.Cancel();
         cancellationTokenSource.Dispose();
 
-        if (heartbeatTask is null)
-        {
-            return;
-        }
-
-        if (heartbeatTask.Id == Task.CurrentId)
+        if (heartbeatTask is null || !waitForCompletion)
         {
             return;
         }
@@ -708,7 +703,8 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
                 {
                     await HandleTransportSendFailureAsync(
                         "接收侧心跳超时，判定链路断开",
-                        new IOException($"超过 {LivenessTimeout.TotalSeconds:0} 秒未收到对端任何消息。"));
+                        new IOException($"超过 {LivenessTimeout.TotalSeconds:0} 秒未收到对端任何消息。"),
+                        calledFromHeartbeat: true);
                     return;
                 }
 
@@ -718,7 +714,8 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
                 {
                     await HandleTransportSendFailureAsync(
                         "Android 播放状态心跳超时，准备重建音频链路",
-                        new IOException($"超过 {AndroidPlaybackStatusTimeout.TotalSeconds:0} 秒未收到 Android 播放状态。"));
+                        new IOException($"超过 {AndroidPlaybackStatusTimeout.TotalSeconds:0} 秒未收到 Android 播放状态。"),
+                        calledFromHeartbeat: true);
                     return;
                 }
 
@@ -740,7 +737,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    await HandleTransportSendFailureAsync("发送保活心跳失败", ex);
+                    await HandleTransportSendFailureAsync("发送保活心跳失败", ex, calledFromHeartbeat: true);
                     return;
                 }
             }
@@ -812,7 +809,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         return restartThreshold > 0 && consecutiveAbnormalCount >= restartThreshold;
     }
 
-    private async Task HandleTransportSendFailureAsync(string operation, Exception ex)
+    private async Task HandleTransportSendFailureAsync(string operation, Exception ex, bool calledFromHeartbeat = false)
     {
         if (_frameSendFaulted || _isStopping)
         {
@@ -822,7 +819,7 @@ public sealed class StreamingCoordinator : IDisposable, IAsyncDisposable
         _frameSendFaulted = true;
         _logService.Error("Coordinator", $"{operation}：{ex.Message}");
         _audioCaptureService.Stop();
-        await CancelHeartbeatLoopAsync();
+        await CancelHeartbeatLoopAsync(waitForCompletion: !calledFromHeartbeat);
         await CancelLatencyProbeLoopAsync();
         await _audioTransportService.DisconnectAsync();
         UpdateStatus(StreamingState.Faulted, $"{operation}：{ex.Message}", Status.TargetDeviceSerial, Status.TargetDeviceName);

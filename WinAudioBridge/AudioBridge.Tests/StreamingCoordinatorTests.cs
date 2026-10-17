@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
 using WpfApp1.Models;
 using WpfApp1.Services;
 using Xunit;
@@ -6,6 +9,43 @@ namespace AudioBridge.Tests;
 
 public sealed class StreamingCoordinatorTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HeartbeatLoop_ShouldDisconnectAndFinish_WhenPeerStatusExpires(bool inboundExpired)
+    {
+        var log = new AppLogService();
+        var settings = new SettingsService();
+        settings.Current.EnableAutoReconnect = false;
+        var icons = new VolumeIconService(log);
+        using var volume = new WindowsVolumeService(log, icons);
+        await using var transport = new AudioTransportService(log);
+        await using var coordinator = new StreamingCoordinator(
+            settings, new AdbService(log), new AudioCaptureService(log), transport, volume, icons, log);
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        await transport.ConnectAsync("127.0.0.1", ((IPEndPoint)listener.LocalEndpoint).Port);
+        using var peer = await listener.AcceptTcpClientAsync();
+
+        var coordinatorType = typeof(StreamingCoordinator);
+        const BindingFlags privateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+        coordinatorType.GetProperty(nameof(StreamingCoordinator.Status))!.SetValue(
+            coordinator, new StreamingStatusSnapshot { State = StreamingState.Streaming });
+        var expiredTicks = DateTime.UtcNow.AddSeconds(-30).Ticks;
+        coordinatorType.GetField("_lastInboundActivityUtcTicks", privateInstance)!
+            .SetValue(coordinator, inboundExpired ? expiredTicks : DateTime.UtcNow.Ticks);
+        coordinatorType.GetField("_lastAndroidPlaybackStatusUtcTicks", privateInstance)!
+            .SetValue(coordinator, expiredTicks);
+        coordinatorType.GetMethod("StartHeartbeatLoop", privateInstance)!.Invoke(coordinator, null);
+        var heartbeatTask = (Task)coordinatorType.GetField("_heartbeatTask", privateInstance)!.GetValue(coordinator)!;
+
+        await heartbeatTask.WaitAsync(TimeSpan.FromSeconds(8));
+
+        Assert.False(transport.IsConnected);
+        Assert.Equal(StreamingState.Faulted, coordinator.Status.State);
+        Assert.Contains(inboundExpired ? "接收侧心跳超时" : "Android 播放状态心跳超时", coordinator.Status.StatusMessage);
+    }
+
     [Fact]
     public void ShouldSendHeartbeat_ShouldReturnFalse_WhenIdleThresholdNotReached()
     {
