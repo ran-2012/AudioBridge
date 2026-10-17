@@ -104,7 +104,7 @@ public sealed class AudioTransportService : IAsyncDisposable
         _stream = client.GetStream();
         _sentFrameCount = 0;
         _intentionalDisconnect = false;
-        _receiveLoopCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _receiveLoopCancellationTokenSource = new CancellationTokenSource();
         _receiveLoopTask = Task.Run(() => ReceiveLoopAsync(_receiveLoopCancellationTokenSource.Token), CancellationToken.None);
         _logService.Info("Transport", $"已接受客户端连接：{client.Client.RemoteEndPoint}。");
     }
@@ -161,7 +161,7 @@ public sealed class AudioTransportService : IAsyncDisposable
         _stream = _client.GetStream();
         _sentFrameCount = 0;
         _intentionalDisconnect = false;
-        _receiveLoopCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _receiveLoopCancellationTokenSource = new CancellationTokenSource();
         _receiveLoopTask = Task.Run(() => ReceiveLoopAsync(_receiveLoopCancellationTokenSource.Token), CancellationToken.None);
         _logService.Info("Transport", $"TCP 连接已建立：{host}:{port}。");
     }

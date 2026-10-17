@@ -1,7 +1,9 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using WpfApp1.Models;
 using WpfApp1.Services;
 using Xunit;
@@ -15,6 +17,70 @@ namespace AudioBridge.Tests;
 // 确保任意时刻只有一个连接流程在执行，从而不会出现并发 ConnectAsync 互相拆连接。
 public sealed class AudioTransportServiceTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReceiveLoop_ShouldKeepReceiving_WhenConnectionAttemptTokenIsCanceled(bool transportAsServer)
+    {
+        await using var transport = new AudioTransportService(new AppLogService());
+        using var attemptCancellation = new CancellationTokenSource();
+        var messages = Channel.CreateUnbounded<TransportMessageReceivedEventArgs>();
+        transport.MessageReceived += (_, message) => messages.Writer.TryWrite(message);
+        var connectionLost = false;
+        transport.ConnectionLost += (_, _) => connectionLost = true;
+        using var peer = new TcpClient();
+
+        if (transportAsServer)
+        {
+            int port;
+            using (var probe = new LoopbackListener()) { port = probe.Port; }
+            await transport.StartListeningAsync("127.0.0.1", port);
+            await peer.ConnectAsync(IPAddress.Loopback, port);
+            await transport.AcceptClientAsync(attemptCancellation.Token);
+        }
+        else
+        {
+            using var listener = new LoopbackListener();
+            await transport.ConnectAsync("127.0.0.1", listener.Port, attemptCancellation.Token);
+            peer.Client = await listener.AcceptAsync();
+        }
+
+        var packet = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(0, 4), 0x57414231);
+        BinaryPrimitives.WriteUInt16LittleEndian(packet.AsSpan(4, 2), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(packet.AsSpan(6, 2), (ushort)BridgeMessageType.HeartbeatAck);
+        await peer.GetStream().WriteAsync(packet);
+        var first = await messages.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(BridgeMessageType.HeartbeatAck, first.MessageType);
+
+        attemptCancellation.Cancel();
+        await peer.GetStream().WriteAsync(packet);
+        var second = await messages.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(BridgeMessageType.HeartbeatAck, second.MessageType);
+        Assert.True(transport.IsConnected);
+        await transport.DisconnectAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.False(transport.IsConnected);
+        Assert.False(connectionLost);
+    }
+
+    [Fact]
+    public async Task AcceptClient_ShouldCancelPendingAccept_WhenAttemptTokenIsCanceled()
+    {
+        int port;
+        using (var probe = new LoopbackListener()) { port = probe.Port; }
+        await using var transport = new AudioTransportService(new AppLogService());
+        await transport.StartListeningAsync("127.0.0.1", port);
+        using var attemptCancellation = new CancellationTokenSource();
+
+        var accepting = transport.AcceptClientAsync(attemptCancellation.Token);
+        attemptCancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => accepting.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.False(transport.IsConnected);
+    }
+
     [Fact]
     public async Task ConnectAsync_ShouldEstablishConnection_OnSingleConnect()
     {
